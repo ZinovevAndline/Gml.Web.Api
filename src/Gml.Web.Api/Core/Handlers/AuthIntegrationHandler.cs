@@ -339,6 +339,37 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
         return Results.Ok(ResponseMessage.Create("Доступ на всех устройствах отключён", HttpStatusCode.OK));
     }
 
+    /// <summary>Revoke only the device whose signed bearer accompanies this request.</summary>
+    public static async Task<IResult> RevokeCurrentLauncherSession(
+        HttpContext context, IGmlManager manager, IAccessTokenService tokens)
+    {
+        var bearer = context.Request.Headers.Authorization.ToString();
+        if (!bearer.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            return Results.Unauthorized();
+
+        var token = bearer["Bearer ".Length..].Trim();
+        if (!tokens.ValidateToken(token))
+            return Results.Unauthorized();
+
+        var user = await manager.Users.GetUserByAccessToken(token) as AuthUser;
+        if (user is null)
+            return Results.Unauthorized();
+
+        var hash = HashToken(token);
+        var target = user.LauncherAuthSessions?.FirstOrDefault(entry =>
+            entry.RevokedAtUtc is null && entry.ExpiresAtUtc > DateTime.UtcNow
+            && CryptographicOperations.FixedTimeEquals(
+                Encoding.UTF8.GetBytes(entry.TokenHash), Encoding.UTF8.GetBytes(hash)));
+        if (target is null) return Results.Unauthorized();
+
+        target.RevokedAtUtc = DateTime.UtcNow;
+        user.PendingJoinTokenHash = null;
+        user.ServerExpiredDate = DateTime.MinValue;
+        user.ServerUuid = string.Empty;
+        await manager.Users.UpdateUser(user);
+        return Results.Ok(new { ok = true });
+    }
+
     [Authorize]
     public static async Task<IResult> GetIntegrationServices(IGmlManager gmlManager, IMapper mapper)
     {
