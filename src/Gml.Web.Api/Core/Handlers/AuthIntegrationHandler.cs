@@ -175,6 +175,9 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
             }
 
             player.AccessToken = token;
+            // Persist the authorization decision before fetching optional skins;
+            // skin providers may be unavailable and must not lose a live session.
+            await gmlManager.Users.UpdateUser(player);
             return await HandleAuthenticatedUser(context, gmlManager, mapper, player, userAgent);
         }
         catch (HttpRequestException exception)
