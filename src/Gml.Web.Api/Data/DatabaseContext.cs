@@ -10,6 +10,7 @@ public class DatabaseContext(DbContextOptions<DatabaseContext> options) : DbCont
     public DbSet<DbUser> Users { get; set; }
     public DbSet<Settings> Settings { get; set; }
     public DbSet<RefreshToken> RefreshTokens { get; set; }
+    public DbSet<PlayerLauncherSession> PlayerLauncherSessions { get; set; }
 
     public DbSet<Role> Roles { get; set; }
     public DbSet<Permission> Permissions { get; set; }
@@ -22,6 +23,17 @@ public class DatabaseContext(DbContextOptions<DatabaseContext> options) : DbCont
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<PlayerLauncherSession>(entity =>
+        {
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.PlayerUuid).IsRequired().HasMaxLength(64);
+            entity.Property(x => x.TokenHash).IsRequired().HasMaxLength(64);
+            entity.Property(x => x.DeviceHash).IsRequired().HasMaxLength(64);
+            entity.Property(x => x.DeviceLabel).IsRequired().HasMaxLength(96);
+            entity.HasIndex(x => x.TokenHash).IsUnique();
+            entity.HasIndex(x => new { x.PlayerUuid, x.RevokedAtUtc, x.ExpiresAtUtc });
+        });
 
         // Composite keys for join entities
         modelBuilder.Entity<RolePermission>()

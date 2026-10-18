@@ -7,6 +7,7 @@ using Gml.Dto.Player;
 using Gml.Dto.User;
 using Gml.Web.Api.Core.Extensions;
 using Gml.Web.Api.Core.Integrations.Auth;
+using Gml.Web.Api.Core.Services;
 using GmlCore.Interfaces;
 using GmlCore.Interfaces.Auth;
 using GmlCore.Interfaces.Enums;
@@ -89,6 +90,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
         IMapper mapper,
         IValidator<BaseUserPassword> validator,
         IAuthService authService,
+        PlayerLauncherSessionRegistry sessions,
         BaseUserPassword authDto)
     {
         try
@@ -139,12 +141,19 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
                 hwid,
                 authResult.IsSlim);
 
+            if (player.IsBanned)
+                return Results.Unauthorized();
+
             player.AccessToken = accessTokenService.GenerateAccessToken(
                 player.Uuid,
                 player.Name,
                 player.Name,
-                ["Player"], ["profiles.view", "integrations.news.view"], 60 * 24 * 10); // 60 минут * 24 часа * 10 дней
+                ["Player"], ["profiles.view", "integrations.news.view"], 60 * 24 * 10);
 
+            // Each completed login has a distinct revocable access token.
+            // This database write must succeed before any token is returned.
+            await sessions.CreateAsync(player.Uuid, player.AccessToken,
+                hwid, userAgent, context.RequestAborted);
             return await HandleAuthenticatedUser(context, gmlManager, mapper, player, userAgent);
         }
         catch (HttpRequestException exception)
@@ -173,6 +182,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
         IMapper mapper,
         IAccessTokenService accessTokenService,
         IAuthService authService,
+        PlayerLauncherSessionRegistry sessions,
         BaseUserPassword authDto)
     {
         try
@@ -186,11 +196,19 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
                     HttpStatusCode.BadRequest));
             }
 
-            var user = await gmlManager.Users.GetUserByAccessToken(authDto.AccessToken);
-            var userAgent = context.Request.Headers["User-Agent"].ToString();
+            var grant = !string.IsNullOrWhiteSpace(authDto.AccessToken)
+                && accessTokenService.ValidateToken(authDto.AccessToken)
+                ? await sessions.ResolveAsync(authDto.AccessToken, context.RequestAborted)
+                : null;
+            // Revocation is authoritative even while the signed JWT is unexpired.
+            if (grant is null) return Results.Unauthorized();
 
-            if (user is not null && accessTokenService.ValidateToken(user.AccessToken))
+            var user = await gmlManager.Users.GetUserByUuid(grant.PlayerUuid);
+            var userAgent = context.Request.Headers["User-Agent"].ToString();
+            if (user is not null
+                && string.Equals(user.Uuid, grant.PlayerUuid, StringComparison.OrdinalIgnoreCase))
             {
+                user.AccessToken = authDto.AccessToken;
                 return await HandleAuthenticatedUser(context, gmlManager, mapper, user, userAgent);
             }
 

@@ -110,6 +110,18 @@ public static class EndpointsExtensions
 
         #endregion
 
+        // ANDLINE backend only: signed service-to-service requests. This
+        // secret is NOT the public GML_SESSION_TOKEN bundled in the launcher.
+        app.MapGet("/api/v1/andline/launcher-sessions/{uuid}",
+                AndlineLauncherSessionsEndpoint.List)
+            .WithTags("ANDLINE/Internal").ExcludeFromDescription();
+        app.MapPost("/api/v1/andline/launcher-sessions/{uuid}/{id:guid}/revoke",
+                AndlineLauncherSessionsEndpoint.Revoke)
+            .WithTags("ANDLINE/Internal").ExcludeFromDescription();
+        app.MapPost("/api/v1/andline/launcher-sessions/{uuid}/revoke-all",
+                AndlineLauncherSessionsEndpoint.RevokeAll)
+            .WithTags("ANDLINE/Internal").ExcludeFromDescription();
+
         #region Auth
 
         app.MapPost("/api/v1/users/logout", AuthHandler.Logout)

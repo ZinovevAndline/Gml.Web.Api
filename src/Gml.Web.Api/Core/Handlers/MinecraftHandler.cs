@@ -3,6 +3,7 @@ using System.Text;
 using Gml.Dto.Minecraft.AuthLib;
 using Gml.Web.Api.Core.Options;
 using Gml.Web.Api.Core.Services;
+using GmlCore.Interfaces.Auth;
 using GmlCore.Interfaces;
 using GmlCore.Interfaces.Enums;
 using Microsoft.AspNetCore.Mvc;
@@ -150,16 +151,32 @@ public class MinecraftHandler : IMinecraftHandler
         return Results.Ok(profile);
     }
 
-    public static async Task<IResult> Join(IGmlManager gmlManager, JoinRequest joinDto)
+    public static async Task<IResult> Join(IGmlManager gmlManager,
+        IAccessTokenService accessTokenService, PlayerLauncherSessionRegistry registry,
+        JoinRequest joinDto)
     {
-        bool validateUser =
-            await gmlManager.Users.ValidateUser(joinDto.SelectedProfile, joinDto.ServerId, joinDto.AccessToken);
-
-        if (!validateUser)
-        {
+        // Gml.Core's legacy ValidateUser matches the last account-wide token
+        // and would invalidate an unrelated device's valid token. Instead
+        // validate the signed token against its one live per-login grant.
+        if (joinDto is null || !Guid.TryParse(joinDto.SelectedProfile, out var playerId)
+            || string.IsNullOrWhiteSpace(joinDto.ServerId)
+            || string.IsNullOrWhiteSpace(joinDto.AccessToken)
+            || !accessTokenService.ValidateToken(joinDto.AccessToken))
             return Results.Unauthorized();
-        }
 
+        var grant = await registry.ResolveAsync(joinDto.AccessToken);
+        if (grant is null || !Guid.TryParse(grant.PlayerUuid, out var grantedId)
+            || grantedId != playerId)
+            return Results.Unauthorized();
+
+        var user = await gmlManager.Users.GetUserByUuid(grant.PlayerUuid);
+        if (user is null || user.IsBanned
+            || !Guid.TryParse(user.Uuid, out var actualId) || actualId != playerId)
+            return Results.Unauthorized();
+
+        user.ServerUuid = joinDto.ServerId;
+        user.ServerExpiredDate = DateTime.UtcNow.AddMinutes(1);
+        await gmlManager.Users.UpdateUser(user);
         return Results.NoContent();
     }
 
