@@ -354,17 +354,24 @@ public class ProfileHandler : IProfileHandler
             return Results.NotFound(ResponseMessage.Create($"Профиль \"{createInfoDto.ProfileName}\" не найден",
                 HttpStatusCode.NotFound));
 
-        var token = context.Request.Headers["Authorization"].FirstOrDefault();
+        // Launcher access tokens are deliberately NOT persisted as plaintext.
+        // Looking up the player by name and comparing user.AccessToken always
+        // fails after reading the account back from SQLite. Validate the signed
+        // bearer and its active (non-revoked) SHA-256 session hash instead.
+        var authorization = context.Request.Headers.Authorization.ToString().Trim();
+        var token = authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? authorization["Bearer ".Length..].Trim()
+            : authorization;
 
-        var user = await gmlManager.Users.GetUserByName(createInfoDto.UserName);
+        if (string.IsNullOrWhiteSpace(token))
+            return Results.Unauthorized();
 
-        if (user is null || user.AccessToken != token || user.IsBanned)
-        {
-            return Results.StatusCode(StatusCodes.Status403Forbidden);
-        }
+        var user = await gmlManager.Users.GetUserByAccessToken(token);
+        if (user is null || user.IsBanned
+            || !string.Equals(user.Name, createInfoDto.UserName, StringComparison.OrdinalIgnoreCase))
+            return Results.Unauthorized();
 
-        if (profile.UserWhiteListGuid.Count != 0 &&
-            !profile.UserWhiteListGuid.Any(c => c.Equals(user.Uuid, StringComparison.OrdinalIgnoreCase)))
+        if (!IsVisibleToPlayer(profile.IsEnabled, profile.UserWhiteListGuid, user.Uuid))
             return Results.Forbid();
 
         user.Manager = gmlManager;
