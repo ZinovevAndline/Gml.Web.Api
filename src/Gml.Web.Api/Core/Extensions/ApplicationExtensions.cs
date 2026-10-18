@@ -212,6 +212,7 @@ public static class ApplicationExtensions
             .AddSingleton<NotificationController>()
             .AddScoped<ISystemService, SystemService>()
             .AddScoped<RestoreService>()
+            .AddScoped<PlayerLauncherSessionRegistry>()
             .AddScoped<ISkinServiceManager, SkinServiceManager>()
             .AddSingleton<IAuthService, AuthService>()
             .AddSingleton<IGitHubService, GitHubService>()
