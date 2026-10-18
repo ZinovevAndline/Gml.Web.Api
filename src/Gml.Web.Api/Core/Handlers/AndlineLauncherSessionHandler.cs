@@ -97,24 +97,25 @@ public static class AndlineLauncherSessionHandler
             || playerUuid == Guid.Empty)
             return Results.BadRequest();
 
-        // Legacy GML SQLite records can store UUIDs with or without hyphens.
-        // A single D-form lookup silently returned an empty session list even
-        // after a successful launcher login. Resolve all supported forms,
-        // comparing the parsed UUID before accepting the identity.
-        var user = await manager.Users.GetUserByUuid(playerUuid.ToString("D")) as AuthUser
-                   ?? await manager.Users.GetUserByUuid(playerUuid.ToString("N")) as AuthUser;
-        if (user is null || !Guid.TryParse(user.Uuid, out var storedUuid) || storedUuid != playerUuid)
-        {
+        // Old GML data can contain multiple Login primary keys associated
+        // with one canonical player UUID. A single GetUserByUuid() returns the
+        // first row (which may have no current tokens), hiding newly created
+        // launcher sessions from ANDLINE and making revocation incomplete.
+        var users = (await manager.Users.GetUsers())
+            .OfType<AuthUser>()
+            .Where(item => Guid.TryParse(item.Uuid, out var id) && id == playerUuid)
+            .ToArray();
+        if (users.Length == 0)
             return action == "list" ? Results.Ok(new { sessions = Array.Empty<object>() }) : Results.NotFound();
-        }
 
         var now = DateTime.UtcNow;
-        user.LauncherAuthSessions ??= [];
 
         if (action == "list")
         {
-            var sessions = user.LauncherAuthSessions
+            var sessions = users.SelectMany(item => item.LauncherAuthSessions ?? [])
                 .Where(entry => entry.RevokedAtUtc is null && entry.ExpiresAtUtc > now)
+                .GroupBy(entry => entry.SessionId, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.OrderByDescending(entry => entry.CreatedAtUtc).First())
                 .OrderByDescending(entry => entry.CreatedAtUtc)
                 .Select(entry => new
                 {
@@ -126,31 +127,49 @@ public static class AndlineLauncherSessionHandler
             return Results.Ok(new { sessions });
         }
 
-        if (action == "revoke")
+        if (action == "revoke"
+            && (string.IsNullOrWhiteSpace(input.SessionId)
+                || !Guid.TryParseExact(input.SessionId, "N", out _)))
+            return Results.BadRequest();
+
+        var found = action == "revoke-all";
+        foreach (var user in users)
         {
-            if (string.IsNullOrWhiteSpace(input.SessionId)
-                || !Guid.TryParseExact(input.SessionId, "N", out _))
-                return Results.BadRequest();
+            user.LauncherAuthSessions ??= [];
+            var changed = false;
+            if (action == "revoke")
+            {
+                foreach (var entry in user.LauncherAuthSessions.Where(entry =>
+                    string.Equals(entry.SessionId, input!.SessionId, StringComparison.OrdinalIgnoreCase)))
+                {
+                    found = true;
+                    if (entry.RevokedAtUtc is null)
+                    {
+                        entry.RevokedAtUtc = now;
+                        changed = true;
+                    }
+                }
+            }
+            else
+            {
+                foreach (var entry in user.LauncherAuthSessions)
+                {
+                    if (entry.RevokedAtUtc is not null) continue;
+                    entry.RevokedAtUtc = now;
+                    changed = true;
+                }
+            }
 
-            var target = user.LauncherAuthSessions.FirstOrDefault(entry =>
-                string.Equals(entry.SessionId, input.SessionId, StringComparison.OrdinalIgnoreCase));
-            if (target is null)
-                return Results.NotFound();
-
-            target.RevokedAtUtc ??= now;
+            // Invalidate an in-flight game join for every matching account row
+            // if and only if a session on that row was revoked.
+            if (!changed) continue;
+            user.PendingJoinTokenHash = null;
+            user.ServerExpiredDate = DateTime.MinValue;
+            user.ServerUuid = string.Empty;
+            await manager.Users.UpdateUser(user);
         }
-        else
-        {
-            foreach (var session in user.LauncherAuthSessions)
-                session.RevokedAtUtc ??= now;
-        }
 
-        // Expiring or revoking a bearer also invalidates a pending game join.
-        user.PendingJoinTokenHash = null;
-        user.ServerExpiredDate = DateTime.MinValue;
-        user.ServerUuid = string.Empty;
-        await manager.Users.UpdateUser(user);
-
+        if (!found) return Results.NotFound();
         return Results.Ok(new { ok = true });
     }
 }
