@@ -97,9 +97,16 @@ public static class AndlineLauncherSessionHandler
             || playerUuid == Guid.Empty)
             return Results.BadRequest();
 
-        var user = await manager.Users.GetUserByUuid(playerUuid.ToString("D")) as AuthUser;
-        if (user is null)
+        // Legacy GML SQLite records can store UUIDs with or without hyphens.
+        // A single D-form lookup silently returned an empty session list even
+        // after a successful launcher login. Resolve all supported forms,
+        // comparing the parsed UUID before accepting the identity.
+        var user = await manager.Users.GetUserByUuid(playerUuid.ToString("D")) as AuthUser
+                   ?? await manager.Users.GetUserByUuid(playerUuid.ToString("N")) as AuthUser;
+        if (user is null || !Guid.TryParse(user.Uuid, out var storedUuid) || storedUuid != playerUuid)
+        {
             return action == "list" ? Results.Ok(new { sessions = Array.Empty<object>() }) : Results.NotFound();
+        }
 
         var now = DateTime.UtcNow;
         user.LauncherAuthSessions ??= [];
