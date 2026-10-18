@@ -57,6 +57,23 @@ namespace Gml.Web.Api.Migrations
                     b.ToTable("ExternalApplications");
                 });
 
+            modelBuilder.Entity("Gml.Web.Api.Data.PlayerLauncherSession", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("TEXT");
+                    b.Property<string>("PlayerUuid").IsRequired().HasMaxLength(64).HasColumnType("TEXT");
+                    b.Property<string>("TokenHash").IsRequired().HasMaxLength(64).HasColumnType("TEXT");
+                    b.Property<string>("DeviceHash").IsRequired().HasMaxLength(64).HasColumnType("TEXT");
+                    b.Property<string>("DeviceLabel").IsRequired().HasMaxLength(96).HasColumnType("TEXT");
+                    b.Property<DateTime>("CreatedAtUtc").HasColumnType("TEXT");
+                    b.Property<DateTime>("LastSeenAtUtc").HasColumnType("TEXT");
+                    b.Property<DateTime>("ExpiresAtUtc").HasColumnType("TEXT");
+                    b.Property<DateTime?>("RevokedAtUtc").HasColumnType("TEXT");
+                    b.HasKey("Id");
+                    b.HasIndex("TokenHash").IsUnique();
+                    b.HasIndex("PlayerUuid", "RevokedAtUtc", "ExpiresAtUtc");
+                    b.ToTable("PlayerLauncherSessions");
+                });
+
             modelBuilder.Entity("Gml.Domains.Auth.Permission", b =>
                 {
                     b.Property<int>("Id")
