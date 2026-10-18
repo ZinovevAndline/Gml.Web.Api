@@ -13,6 +13,22 @@ public class CustomEndpointAuthResponseTests
         Assert.That(CustomEndpointAuthService.ParseResponse("Player", true, body).IsSuccess, Is.False);
     }
 
+    [TestCase("{}")]
+    [TestCase("{\"Login\":\"Player\"}")]
+    [TestCase("{\"Login\":\"Other\",\"UserUuid\":\"12345678-1234-1234-1234-123456789abc\"}")]
+    [TestCase("{\"Login\":\"Player\",\"UserUuid\":\"00000000-0000-0000-0000-000000000000\"}")]
+    public void MissingOrMismatchedIdentityDoesNotAuthenticate(string body)
+    {
+        Assert.That(CustomEndpointAuthService.ParseResponse("Player", true, body).IsSuccess, Is.False);
+    }
+
+    [Test]
+    public void UpstreamSuccessMustNotPromotePendingTwoFactor()
+    {
+        var body = "{\"Login\":\"Player\",\"UserUuid\":\"12345678-1234-1234-1234-123456789abc\",\"Message\":\"2FA_PENDING\"}";
+        Assert.That(CustomEndpointAuthService.ParseResponse("Player", true, body).IsSuccess, Is.False);
+    }
+
     [TestCase("2FA_PENDING [tiauth:request:continuation:120] Подтвердите вход в боте")]
     [TestCase("2FA_DENIED")]
     [TestCase("2FA_EXPIRED")]

@@ -49,16 +49,26 @@ public class CustomEndpointAuthService(IHttpClientFactory httpClientFactory, IGm
         if (model is null)
             return new AuthResult { Login = login, IsSuccess = false };
 
+        // HTTP 200 does not prove a Minecraft identity: ANDLINE must return
+        // the requested player name and a non-zero UUID before we create a token.
+        // A continuation/denial must remain unauthenticated even if the upstream
+        // endpoint accidentally responds with 200.
+        var verifiedIdentity = !string.IsNullOrWhiteSpace(model.Login)
+            && string.Equals(model.Login, login, StringComparison.OrdinalIgnoreCase)
+            && Guid.TryParse(model.UserUuid, out var id) && id != Guid.Empty;
+        var hasTwoFactorOutcome = model.Message?.StartsWith("2FA_", StringComparison.OrdinalIgnoreCase) ?? false;
+        var authenticated = success && verifiedIdentity && !hasTwoFactorOutcome;
+
         return new AuthResult
         {
             Login = model.Login ?? login,
-            Uuid = model.UserUuid,
+            Uuid = authenticated ? model.UserUuid : null,
             IsSlim = model.IsSlim ?? false,
-            IsSuccess = success,
+            IsSuccess = authenticated,
             // Keep the ANDLINE continuation marker intact for the initiating
             // launcher; never log it or replace it with a TOTP-only prompt.
             Message = model.Message,
-            TwoFactorEnabled = !success &&
+            TwoFactorEnabled = !authenticated &&
                 (model.Message?.Contains("2fa", StringComparison.OrdinalIgnoreCase) ?? false)
         };
     }
