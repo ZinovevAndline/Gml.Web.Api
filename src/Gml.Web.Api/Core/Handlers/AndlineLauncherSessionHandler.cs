@@ -121,6 +121,8 @@ public static class AndlineLauncherSessionHandler
                 {
                     session_id = entry.SessionId,
                     device_name = entry.DeviceName,
+                    ip_address = entry.IpAddress,
+                    last_seen_at = entry.LastSeenAtUtc ?? entry.CreatedAtUtc,
                     created_at = entry.CreatedAtUtc,
                     expires_at = entry.ExpiresAtUtc
                 }).ToArray();
