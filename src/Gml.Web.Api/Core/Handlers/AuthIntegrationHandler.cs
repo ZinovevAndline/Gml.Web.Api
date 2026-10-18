@@ -178,6 +178,8 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
                 TokenHash = HashToken(token),
                 DeviceHash = HashToken(hwid),
                 DeviceName = userAgent.Length > 160 ? userAgent[..160] : userAgent,
+                IpAddress = context.ParseRemoteAddress()?.ToString(),
+                LastSeenAtUtc = now,
                 CreatedAtUtc = now,
                 ExpiresAtUtc = now.AddDays(10)
             });
@@ -300,6 +302,8 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
             {
                 entry.SessionId,
                 entry.DeviceName,
+                entry.IpAddress,
+                entry.LastSeenAtUtc,
                 entry.CreatedAtUtc,
                 entry.ExpiresAtUtc,
                 IsCurrent = entry.TokenHash == currentHash
