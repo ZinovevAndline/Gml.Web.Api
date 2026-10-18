@@ -22,6 +22,10 @@ namespace Gml.Web.Api.Core.Handlers;
 
 public class AuthIntegrationHandler : IAuthIntegrationHandler
 {
+    // Fixed-size striped locks: no unbounded dictionary for untrusted logins.
+    private static readonly SemaphoreSlim[] SessionLocks = Enumerable.Range(0, 128)
+        .Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+
     private static async Task<IResult?> HandleCommonAuthValidation(HttpContext context,
         IGmlManager gmlManager,
         AuthType authType,
@@ -133,15 +137,26 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
                     authResult.Message ?? "Неверный логин или пароль",
                     HttpStatusCode.Unauthorized));
 
-            var player = await gmlManager.Users.GetAuthData(
-                authResult.Login ?? authDto.Login,
-                authDto.Password,
-                userAgent,
-                context.Request.Protocol,
-                context.ParseRemoteAddress(),
-                authResult.Uuid,
-                hwid,
-                authResult.IsSlim);
+            // A single SQLite JSON row contains all sessions for one player.
+            // Serialize concurrent logins for the same canonical UUID so a
+            // second device cannot overwrite the first device's new session.
+            var identity = Guid.TryParse(authResult.Uuid, out var canonical)
+                ? canonical.ToString("N")
+                : (authResult.Login ?? authDto.Login).ToUpperInvariant();
+            var stripe = SessionLocks[(StringComparer.Ordinal.GetHashCode(identity) & int.MaxValue) % SessionLocks.Length];
+            await stripe.WaitAsync(context.RequestAborted);
+            IUser player;
+            try
+            {
+                player = await gmlManager.Users.GetAuthData(
+                    authResult.Login ?? authDto.Login,
+                    authDto.Password,
+                    userAgent,
+                    context.Request.Protocol,
+                    context.ParseRemoteAddress(),
+                    authResult.Uuid,
+                    hwid,
+                    authResult.IsSlim);
 
             // Register an individual, revocable launcher session instead of replacing
             // the account's sole bearer token on each new sign-in.
@@ -177,7 +192,12 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
             player.AccessToken = token;
             // Persist the authorization decision before fetching optional skins;
             // skin providers may be unavailable and must not lose a live session.
-            await gmlManager.Users.UpdateUser(player);
+                await gmlManager.Users.UpdateUser(player);
+            }
+            finally
+            {
+                stripe.Release();
+            }
             return await HandleAuthenticatedUser(context, gmlManager, mapper, player, userAgent);
         }
         catch (HttpRequestException exception)
