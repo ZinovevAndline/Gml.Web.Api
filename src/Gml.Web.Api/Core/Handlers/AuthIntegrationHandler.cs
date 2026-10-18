@@ -120,7 +120,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
             if (authResult.TwoFactorEnabled && string.IsNullOrEmpty(authDto.TwoFactorCode))
             {
                 return Results.BadRequest(ResponseMessage.Create(
-                    "Введите код из приложения 2FA",
+                    authResult.Message ?? "Введите код из приложения 2FA",
                     HttpStatusCode.Unauthorized));
             }
 

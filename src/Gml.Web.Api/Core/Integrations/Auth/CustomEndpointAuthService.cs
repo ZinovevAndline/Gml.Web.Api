@@ -19,39 +19,47 @@ public class CustomEndpointAuthService(IHttpClientFactory httpClientFactory, IGm
             Totp = totp
         });
 
-        var content = new StringContent(dto, Encoding.UTF8, "application/json");
+        using var content = new StringContent(dto, Encoding.UTF8, "application/json");
 
         var authService = await gmlManager.Integrations.GetActiveAuthService();
 
-        var result = await _httpClient.PostAsync(authService!.Endpoint, content);
+        using var result = await _httpClient.PostAsync(authService!.Endpoint, content);
 
         var resultContent = await result.Content.ReadAsStringAsync();
 
-        var authResult = new AuthResult
-        {
-            Login = login,
-            IsSuccess = result.IsSuccessStatusCode
-        };
+        return ParseResponse(login, result.IsSuccessStatusCode, resultContent);
+    }
 
-        if (string.IsNullOrEmpty(resultContent))
-            return authResult;
+    internal static AuthResult ParseResponse(string login, bool success, string body)
+    {
+        // Empty/malformed responses must never create an authenticated player.
+        if (string.IsNullOrWhiteSpace(body))
+            return new AuthResult { Login = login, IsSuccess = false };
 
-        if (!result.IsSuccessStatusCode && resultContent.Contains("2fa", StringComparison.CurrentCultureIgnoreCase))
+        AuthCustomResponse? model;
+        try
         {
-            return new AuthResult
-            {
-                IsSuccess = false,
-                Message = "Введите код из приложения 2FA",
-                TwoFactorEnabled = true
-            };
+            model = JsonConvert.DeserializeObject<AuthCustomResponse>(body);
+        }
+        catch (JsonException)
+        {
+            return new AuthResult { Login = login, IsSuccess = false };
         }
 
-        var model = JsonConvert.DeserializeObject<AuthCustomResponse>(resultContent);
+        if (model is null)
+            return new AuthResult { Login = login, IsSuccess = false };
 
-        authResult.Login = model?.Login ?? login;
-        authResult.Uuid = model?.UserUuid;
-        authResult.IsSlim = model?.IsSlim ?? false;
-
-        return authResult;
+        return new AuthResult
+        {
+            Login = model.Login ?? login,
+            Uuid = model.UserUuid,
+            IsSlim = model.IsSlim ?? false,
+            IsSuccess = success,
+            // Keep the ANDLINE continuation marker intact for the initiating
+            // launcher; never log it or replace it with a TOTP-only prompt.
+            Message = model.Message,
+            TwoFactorEnabled = !success &&
+                (model.Message?.Contains("2fa", StringComparison.OrdinalIgnoreCase) ?? false)
+        };
     }
 }
