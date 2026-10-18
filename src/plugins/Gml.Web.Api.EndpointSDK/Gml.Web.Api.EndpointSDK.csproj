@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <TargetFramework>netstandard2.1</TargetFramework>
@@ -11,7 +11,8 @@
 
     <ItemGroup>
       <PackageReference Include="FluentValidation" Version="11.12.0"/>
-      <PackageReference Include="Gml.Dto" Version="2026.1.0-beta1"/>
+      <PackageReference Include="Gml.Dto" Version="2026.1.0-beta1" Condition="'$(GmlCoreRoot)' == ''"/>
+      <ProjectReference Include="$(GmlCoreRoot)/src/Gml.Dto/Gml.Dto.csproj" Condition="'$(GmlCoreRoot)' != ''"/>
       <PackageReference Include="Microsoft.AspNetCore.Http" Version="2.3.13" />
         <PackageReference Include="Newtonsoft.Json" Version="13.0.4"/>
     </ItemGroup>

@@ -23,7 +23,7 @@
     <PackageReference Include="Mapster.DependencyInjection" Version="10.0.13" />
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
     <PackageReference Include="FluentValidation" Version="11.12.0"/>
-    <PackageReference Include="Gml.Core" Version="2026.1.0-beta1"/>
+    <PackageReference Include="Gml.Core" Version="2026.1.0-beta1" Condition="'$(GmlCoreRoot)' == ''"/>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.13"/>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.13"/>
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.13"/>
@@ -165,6 +165,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="$(GmlCoreRoot)/src/Gml.Core/Gml.Core.csproj" Condition="'$(GmlCoreRoot)' != ''"/>
     <ProjectReference Include="..\plugins\Gml.Web.Api.EndpointSDK\Gml.Web.Api.EndpointSDK.csproj"/>
   </ItemGroup>
 
