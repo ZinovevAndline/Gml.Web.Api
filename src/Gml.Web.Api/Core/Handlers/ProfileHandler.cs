@@ -39,9 +39,9 @@ public class ProfileHandler : IProfileHandler
     public static async Task<IResult> GetProfiles(
         HttpContext context,
         IMapper mapper,
-        IGmlManager gmlManager,
-        ILogger<ProfileHandler> logger)
+        IGmlManager gmlManager)
     {
+        var logger = context.RequestServices.GetRequiredService<ILogger<ProfileHandler>>();
         var allProfiles = (await gmlManager.Profiles.GetProfiles()).ToArray();
         IGameProfile[] gameProfiles;
 
