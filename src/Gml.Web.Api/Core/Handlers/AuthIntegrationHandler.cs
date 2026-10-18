@@ -26,6 +26,12 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
     private static readonly SemaphoreSlim[] SessionLocks = Enumerable.Range(0, 128)
         .Select(_ => new SemaphoreSlim(1, 1)).ToArray();
 
+    internal static SemaphoreSlim SessionLockForUuid(Guid uuid)
+    {
+        var identity = uuid.ToString("N");
+        return SessionLocks[(StringComparer.Ordinal.GetHashCode(identity) & int.MaxValue) % SessionLocks.Length];
+    }
+
     private static async Task<IResult?> HandleCommonAuthValidation(HttpContext context,
         IGmlManager gmlManager,
         AuthType authType,
@@ -360,8 +366,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
         if (entry is null || entry.LastSeenAtUtc is { } last && now - last < TimeSpan.FromMinutes(1))
             return;
 
-        var identity = uuid.ToString("N");
-        var stripe = SessionLocks[(StringComparer.Ordinal.GetHashCode(identity) & int.MaxValue) % SessionLocks.Length];
+        var stripe = SessionLockForUuid(uuid);
         await stripe.WaitAsync();
         try
         {
