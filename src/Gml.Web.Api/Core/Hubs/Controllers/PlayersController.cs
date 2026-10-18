@@ -69,7 +69,11 @@ public class PlayersController : ConcurrentDictionary<string, UserLauncherInfo>
 
             Debug.WriteLine($"{user.User.Name} | {user.User.Uuid} | Disconnected");
 
-            _ = OnKickUser(user.User.Name, "Потеряно соединение с сервером");
+            // One physical launcher disconnecting must not kick another live
+            // launcher session of the same Minecraft account.
+            if (!LauncherInfos.Values.Any(current =>
+                    string.Equals(current.User.Uuid, user.User.Uuid, StringComparison.OrdinalIgnoreCase)))
+                _ = OnKickUser(user.User.Name, "Потеряно соединение с сервером");
         }
     }
 
@@ -77,7 +81,8 @@ public class PlayersController : ConcurrentDictionary<string, UserLauncherInfo>
     {
         if (LauncherInfos.TryGetValue(connectionId, out var user))
         {
-            Debug.WriteLine($"{user.User.Name} | {user.User.Uuid} | Session active | hash: {hash}");
+            // Never log launcher proof material or session fingerprints.
+            Debug.WriteLine($"{user.User.Name} | {user.User.Uuid} | Launcher heartbeat");
             user.ExpiredDate = DateTimeOffset.Now.AddSeconds(30);
         }
     }
