@@ -24,12 +24,26 @@ namespace Gml.Web.Api.Core.Handlers;
 
 public class ProfileHandler : IProfileHandler
 {
+    // UUIDs stored in older whitelists can be upper-case, lower-case, with
+    // hyphens, or in compact N format. Compare UUID values, never their text.
+    // Keep both the enabled flag and whitelist gate for every player profile.
+    public static bool IsVisibleToPlayer(bool enabled, IEnumerable<string> whitelist, string? playerUuid)
+    {
+        if (!enabled) return false;
+        var entries = whitelist as string[] ?? whitelist.ToArray();
+        if (entries.Length == 0) return true;
+        if (!Guid.TryParse(playerUuid, out var playerId)) return false;
+        return entries.Any(entry => Guid.TryParse(entry, out var allowedId) && allowedId == playerId);
+    }
+
     public static async Task<IResult> GetProfiles(
         HttpContext context,
         IMapper mapper,
-        IGmlManager gmlManager)
+        IGmlManager gmlManager,
+        ILogger<ProfileHandler> logger)
     {
-        IEnumerable<IGameProfile> profiles = [];
+        var allProfiles = (await gmlManager.Profiles.GetProfiles()).ToArray();
+        IGameProfile[] gameProfiles;
 
         if (context.User.IsInRole("Player"))
         {
@@ -49,19 +63,23 @@ public class ProfileHandler : IProfileHandler
                     HttpStatusCode.BadRequest));
             }
 
-            profiles = (await gmlManager.Profiles.GetProfiles())
-                .Where(c =>
-                    c is { IsEnabled: true, UserWhiteListGuid.Count: 0 } ||
-                    c.UserWhiteListGuid.Any(g => g.Equals(user.Uuid)));
+            gameProfiles = allProfiles.Where(profile =>
+                IsVisibleToPlayer(profile.IsEnabled, profile.UserWhiteListGuid, user.Uuid)).ToArray();
+
+            if (gameProfiles.Length == 0 && allProfiles.Length != 0)
+                logger.LogWarning(
+                    "GML game catalog has {Total} profiles but zero visible to a player. Check enabled flags and UUID whitelist format.",
+                    allProfiles.Length);
         }
         else
         {
-            profiles = await gmlManager.Profiles.GetProfiles();
+            gameProfiles = allProfiles;
         }
 
-        var gameProfiles = profiles as IGameProfile[] ?? profiles.ToArray();
+        if (allProfiles.Length == 0)
+            logger.LogWarning("GML game catalog is empty in the active storage. Verify PROJECT_NAME, PROJECT_PATH and data.db, do not create replacement profiles before checking backups.");
 
-        var dtoProfiles = mapper.Map<ProfileReadDto[]>(profiles);
+        var dtoProfiles = mapper.Map<ProfileReadDto[]>(gameProfiles);
 
         foreach (var profile in dtoProfiles)
         {
