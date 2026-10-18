@@ -100,7 +100,9 @@ public class AccessTokenService : IAccessTokenService
         var claims = new List<Claim>
         {
             new("sub", subject),
-            new(ClaimTypes.NameIdentifier, subject)
+            new(ClaimTypes.NameIdentifier, subject),
+            // Ensure every login is a distinct token even within the same second.
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N"))
         };
 
         if (!string.IsNullOrWhiteSpace(userLogin))
