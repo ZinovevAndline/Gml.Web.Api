@@ -287,9 +287,21 @@ public static class ApplicationExtensions
                             : context.Request.Query["access_token"].ToString();
 
                         var manager = context.HttpContext.RequestServices.GetRequiredService<IGmlManager>();
-                        if (string.IsNullOrEmpty(token)
-                            || await manager.Users.GetUserByAccessToken(token) is null)
+                        if (string.IsNullOrEmpty(token))
+                        {
                             context.Fail("Launcher session expired or revoked");
+                            return;
+                        }
+
+                        var validUser = await manager.Users.GetUserByAccessToken(token);
+                        if (validUser is not Gml.Models.User.AuthUser account)
+                        {
+                            context.Fail("Launcher session expired or revoked");
+                            return;
+                        }
+
+                        await Gml.Web.Api.Core.Handlers.AuthIntegrationHandler
+                            .TouchLauncherSessionAsync(manager, account, token);
                     }
                 };
             })
