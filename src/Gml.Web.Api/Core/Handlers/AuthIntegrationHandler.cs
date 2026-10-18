@@ -343,6 +343,44 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
         return Results.Ok(ResponseMessage.Create("Доступ на всех устройствах отключён", HttpStatusCode.OK));
     }
 
+    /// <summary>
+    /// Persist real launcher activity at most once per minute. Re-fetch the
+    /// token under the same per-player lock as sign-in to prevent a stale
+    /// session snapshot from replacing a concurrent newly issued token.
+    /// </summary>
+    public static async Task TouchLauncherSessionAsync(
+        IGmlManager manager, AuthUser validatedUser, string token)
+    {
+        if (!Guid.TryParse(validatedUser.Uuid, out var uuid)) return;
+        var hash = HashToken(token);
+        var now = DateTime.UtcNow;
+        var entry = validatedUser.LauncherAuthSessions?.FirstOrDefault(item =>
+            item.RevokedAtUtc is null && item.ExpiresAtUtc > now
+            && string.Equals(item.TokenHash, hash, StringComparison.OrdinalIgnoreCase));
+        if (entry is null || entry.LastSeenAtUtc is { } last && now - last < TimeSpan.FromMinutes(1))
+            return;
+
+        var identity = uuid.ToString("N");
+        var stripe = SessionLocks[(StringComparer.Ordinal.GetHashCode(identity) & int.MaxValue) % SessionLocks.Length];
+        await stripe.WaitAsync();
+        try
+        {
+            var current = await manager.Users.GetUserByAccessToken(token) as AuthUser;
+            var active = current?.LauncherAuthSessions?.FirstOrDefault(item =>
+                item.RevokedAtUtc is null && item.ExpiresAtUtc > DateTime.UtcNow
+                && string.Equals(item.TokenHash, hash, StringComparison.OrdinalIgnoreCase));
+            if (active is null || active.LastSeenAtUtc is { } seen
+                && DateTime.UtcNow - seen < TimeSpan.FromMinutes(1))
+                return;
+            active.LastSeenAtUtc = DateTime.UtcNow;
+            await manager.Users.UpdateUser(current!);
+        }
+        finally
+        {
+            stripe.Release();
+        }
+    }
+
     /// <summary>Revoke only the device whose signed bearer accompanies this request.</summary>
     public static async Task<IResult> RevokeCurrentLauncherSession(
         HttpContext context, IGmlManager manager, IAccessTokenService tokens)
