@@ -193,12 +193,14 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
             // Persist the authorization decision before fetching optional skins;
             // skin providers may be unavailable and must not lose a live session.
                 await gmlManager.Users.UpdateUser(player);
+                // The optional texture update also writes the player JSON;
+                // keep it inside this lock or it could overwrite a new login.
+                return await HandleAuthenticatedUser(context, gmlManager, mapper, player, userAgent);
             }
             finally
             {
                 stripe.Release();
             }
-            return await HandleAuthenticatedUser(context, gmlManager, mapper, player, userAgent);
         }
         catch (HttpRequestException exception)
         {
