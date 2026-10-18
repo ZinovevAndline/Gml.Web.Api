@@ -570,6 +570,13 @@ public static class EndpointsExtensions
             .Produces<ResponseMessage<PlayerReadDto>>()
             .Produces<ResponseMessage>((int)HttpStatusCode.BadRequest);
 
+        // A separate authenticated server-to-server channel; never accessible
+        // with launcher JWT or administrator browser credentials.
+        app.MapPost("/api/v1/internal/andline/launcher-sessions/{action}",
+                AndlineLauncherSessionHandler.Execute)
+            .WithTags("Integration/Auth/Internal")
+            .DisableAntiforgery();
+
         app.MapGet("/api/v1/integrations/auth/sessions", AuthIntegrationHandler.GetLauncherSessions)
             .WithTags("Integration/Auth")
             .RequireAuthorization(policy => policy.RequireClaim("gml_session", "1"));
