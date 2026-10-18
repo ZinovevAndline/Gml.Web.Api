@@ -325,13 +325,25 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
         if (user is null)
             return Results.Unauthorized();
 
-        var target = user.LauncherAuthSessions?.FirstOrDefault(entry => entry.SessionId == sessionId);
-        if (target is null)
-            return Results.NotFound(ResponseMessage.Create("Сессия не найдена", HttpStatusCode.NotFound));
+        if (!Guid.TryParse(user.Uuid, out var uuid)) return Results.Unauthorized();
+        var stripe = SessionLockForUuid(uuid);
+        await stripe.WaitAsync(context.RequestAborted);
+        try
+        {
+            user = await GetCurrentLauncherUser(context, manager, tokens);
+            if (user is null) return Results.Unauthorized();
+            var target = user.LauncherAuthSessions?.FirstOrDefault(entry => entry.SessionId == sessionId);
+            if (target is null)
+                return Results.NotFound(ResponseMessage.Create("Сессия не найдена", HttpStatusCode.NotFound));
 
-        target.RevokedAtUtc ??= DateTime.UtcNow;
-        await manager.Users.UpdateUser(user);
-        return Results.Ok(ResponseMessage.Create("Доступ устройства отключён", HttpStatusCode.OK));
+            target.RevokedAtUtc ??= DateTime.UtcNow;
+            await manager.Users.UpdateUser(user);
+            return Results.Ok(ResponseMessage.Create("Доступ устройства отключён", HttpStatusCode.OK));
+        }
+        finally
+        {
+            stripe.Release();
+        }
     }
 
     public static async Task<IResult> RevokeAllLauncherSessions(
@@ -341,12 +353,27 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
         if (user is null)
             return Results.Unauthorized();
 
-        var now = DateTime.UtcNow;
-        foreach (var entry in user.LauncherAuthSessions ?? [])
-            entry.RevokedAtUtc ??= now;
+        if (!Guid.TryParse(user.Uuid, out var uuid)) return Results.Unauthorized();
+        var stripe = SessionLockForUuid(uuid);
+        await stripe.WaitAsync(context.RequestAborted);
+        try
+        {
+            user = await GetCurrentLauncherUser(context, manager, tokens);
+            if (user is null) return Results.Unauthorized();
+            var now = DateTime.UtcNow;
+            foreach (var entry in user.LauncherAuthSessions ?? [])
+                entry.RevokedAtUtc ??= now;
 
-        await manager.Users.UpdateUser(user);
-        return Results.Ok(ResponseMessage.Create("Доступ на всех устройствах отключён", HttpStatusCode.OK));
+            user.PendingJoinTokenHash = null;
+            user.ServerExpiredDate = DateTime.MinValue;
+            user.ServerUuid = string.Empty;
+            await manager.Users.UpdateUser(user);
+            return Results.Ok(ResponseMessage.Create("Доступ на всех устройствах отключён", HttpStatusCode.OK));
+        }
+        finally
+        {
+            stripe.Release();
+        }
     }
 
     /// <summary>
@@ -402,19 +429,31 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
         if (user is null)
             return Results.Unauthorized();
 
-        var hash = HashToken(token);
-        var target = user.LauncherAuthSessions?.FirstOrDefault(entry =>
-            entry.RevokedAtUtc is null && entry.ExpiresAtUtc > DateTime.UtcNow
-            && CryptographicOperations.FixedTimeEquals(
-                Encoding.UTF8.GetBytes(entry.TokenHash), Encoding.UTF8.GetBytes(hash)));
-        if (target is null) return Results.Unauthorized();
+        if (!Guid.TryParse(user.Uuid, out var uuid)) return Results.Unauthorized();
+        var stripe = SessionLockForUuid(uuid);
+        await stripe.WaitAsync(context.RequestAborted);
+        try
+        {
+            user = await manager.Users.GetUserByAccessToken(token) as AuthUser;
+            if (user is null) return Results.Unauthorized();
 
-        target.RevokedAtUtc = DateTime.UtcNow;
-        user.PendingJoinTokenHash = null;
-        user.ServerExpiredDate = DateTime.MinValue;
-        user.ServerUuid = string.Empty;
-        await manager.Users.UpdateUser(user);
-        return Results.Ok(new { ok = true });
+            var hash = HashToken(token);
+            var target = user.LauncherAuthSessions?.FirstOrDefault(entry =>
+                entry.RevokedAtUtc is null && entry.ExpiresAtUtc > DateTime.UtcNow
+                && string.Equals(entry.TokenHash, hash, StringComparison.OrdinalIgnoreCase));
+            if (target is null) return Results.Unauthorized();
+
+            target.RevokedAtUtc = DateTime.UtcNow;
+            user.PendingJoinTokenHash = null;
+            user.ServerExpiredDate = DateTime.MinValue;
+            user.ServerUuid = string.Empty;
+            await manager.Users.UpdateUser(user);
+            return Results.Ok(new { ok = true });
+        }
+        finally
+        {
+            stripe.Release();
+        }
     }
 
     [Authorize]
