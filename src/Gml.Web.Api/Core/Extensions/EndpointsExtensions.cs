@@ -581,6 +581,11 @@ public static class EndpointsExtensions
             .WithTags("Integration/Auth")
             .RequireAuthorization(policy => policy.RequireClaim("gml_session", "1"));
 
+        app.MapPost("/api/v1/integrations/auth/sessions/revoke-current",
+                AuthIntegrationHandler.RevokeCurrentLauncherSession)
+            .WithTags("Integration/Auth")
+            .RequireAuthorization(policy => policy.RequireClaim("gml_session", "1"));
+
         app.MapPost("/api/v1/integrations/auth/sessions/{sessionId}/revoke",
                 AuthIntegrationHandler.RevokeLauncherSession)
             .WithTags("Integration/Auth")
