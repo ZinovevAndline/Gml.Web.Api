@@ -1,4 +1,8 @@
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
+using Gml.Models.Sessions;
+using Gml.Models.User;
 using MapsterMapper;
 using FluentValidation;
 using Gml.Dto.Integration;
@@ -139,12 +143,38 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
                 hwid,
                 authResult.IsSlim);
 
-            player.AccessToken = accessTokenService.GenerateAccessToken(
+            // Register an individual, revocable launcher session instead of replacing
+            // the account's sole bearer token on each new sign-in.
+            if (player is not AuthUser launcherUser)
+                return Results.Unauthorized();
+
+            var now = DateTime.UtcNow;
+            var token = accessTokenService.GenerateAccessToken(
                 player.Uuid,
                 player.Name,
                 player.Name,
-                ["Player"], ["profiles.view", "integrations.news.view"], 60 * 24 * 10); // 60 минут * 24 часа * 10 дней
+                ["Player"], ["profiles.view", "integrations.news.view"], 60 * 24 * 10);
 
+            launcherUser.LauncherAuthSessions ??= [];
+            launcherUser.LauncherAuthSessions.RemoveAll(entry => entry.ExpiresAtUtc <= now);
+            launcherUser.LauncherAuthSessions.Add(new LauncherAuthSession
+            {
+                SessionId = Guid.NewGuid().ToString("N"),
+                TokenHash = HashToken(token),
+                DeviceHash = HashToken(hwid),
+                DeviceName = userAgent.Length > 160 ? userAgent[..160] : userAgent,
+                CreatedAtUtc = now,
+                ExpiresAtUtc = now.AddDays(10)
+            });
+            // Prevent unbounded growth from malicious or broken clients.
+            if (launcherUser.LauncherAuthSessions.Count > 40)
+            {
+                var retained = launcherUser.LauncherAuthSessions
+                    .OrderByDescending(entry => entry.CreatedAtUtc).Take(40).ToList();
+                launcherUser.LauncherAuthSessions = retained;
+            }
+
+            player.AccessToken = token;
             return await HandleAuthenticatedUser(context, gmlManager, mapper, player, userAgent);
         }
         catch (HttpRequestException exception)
@@ -189,7 +219,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
             var user = await gmlManager.Users.GetUserByAccessToken(authDto.AccessToken);
             var userAgent = context.Request.Headers["User-Agent"].ToString();
 
-            if (user is not null && accessTokenService.ValidateToken(user.AccessToken))
+            if (user is not null && !user.IsBanned && accessTokenService.ValidateToken(authDto.AccessToken))
             {
                 return await HandleAuthenticatedUser(context, gmlManager, mapper, user, userAgent);
             }
@@ -206,6 +236,82 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
         {
             return HandleAuthException(exception, false);
         }
+    }
+
+
+    private static string HashToken(string token) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+
+    private static async Task<AuthUser?> GetCurrentLauncherUser(
+        HttpContext context, IGmlManager manager, IAccessTokenService tokens)
+    {
+        var authorization = context.Request.Headers.Authorization.ToString();
+        if (!authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var bearer = authorization["Bearer ".Length..].Trim();
+        if (!tokens.ValidateToken(bearer))
+            return null;
+
+        return await manager.Users.GetUserByAccessToken(bearer) as AuthUser;
+    }
+
+    // These endpoints are restricted to the current launcher's signed JWT.
+    // The caller can only list or revoke sessions belonging to its own identity.
+    public static async Task<IResult> GetLauncherSessions(
+        HttpContext context, IGmlManager manager, IAccessTokenService tokens)
+    {
+        var user = await GetCurrentLauncherUser(context, manager, tokens);
+        if (user is null)
+            return Results.Unauthorized();
+
+        var bearer = context.Request.Headers.Authorization.ToString()["Bearer ".Length..].Trim();
+        var currentHash = HashToken(bearer);
+        var now = DateTime.UtcNow;
+        var sessions = (user.LauncherAuthSessions ?? [])
+            .Where(entry => entry.RevokedAtUtc is null && entry.ExpiresAtUtc > now)
+            .OrderByDescending(entry => entry.CreatedAtUtc)
+            .Select(entry => new
+            {
+                entry.SessionId,
+                entry.DeviceName,
+                entry.CreatedAtUtc,
+                entry.ExpiresAtUtc,
+                IsCurrent = entry.TokenHash == currentHash
+            }).ToList();
+
+        return Results.Ok(ResponseMessage.Create(sessions, string.Empty, HttpStatusCode.OK));
+    }
+
+    public static async Task<IResult> RevokeLauncherSession(
+        HttpContext context, IGmlManager manager, IAccessTokenService tokens, string sessionId)
+    {
+        var user = await GetCurrentLauncherUser(context, manager, tokens);
+        if (user is null)
+            return Results.Unauthorized();
+
+        var target = user.LauncherAuthSessions?.FirstOrDefault(entry => entry.SessionId == sessionId);
+        if (target is null)
+            return Results.NotFound(ResponseMessage.Create("Сессия не найдена", HttpStatusCode.NotFound));
+
+        target.RevokedAtUtc ??= DateTime.UtcNow;
+        await manager.Users.UpdateUser(user);
+        return Results.Ok(ResponseMessage.Create("Доступ устройства отключён", HttpStatusCode.OK));
+    }
+
+    public static async Task<IResult> RevokeAllLauncherSessions(
+        HttpContext context, IGmlManager manager, IAccessTokenService tokens)
+    {
+        var user = await GetCurrentLauncherUser(context, manager, tokens);
+        if (user is null)
+            return Results.Unauthorized();
+
+        var now = DateTime.UtcNow;
+        foreach (var entry in user.LauncherAuthSessions ?? [])
+            entry.RevokedAtUtc ??= now;
+
+        await manager.Users.UpdateUser(user);
+        return Results.Ok(ResponseMessage.Create("Доступ на всех устройствах отключён", HttpStatusCode.OK));
     }
 
     [Authorize]

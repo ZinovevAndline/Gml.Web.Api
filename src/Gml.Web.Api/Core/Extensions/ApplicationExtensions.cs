@@ -13,6 +13,7 @@ using Gml.Web.Api.Core.Options;
 using Gml.Web.Api.Core.Services;
 using Gml.Web.Api.Data;
 using GmlCore.Interfaces.Auth;
+using GmlCore.Interfaces;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
@@ -272,6 +273,23 @@ public static class ApplicationExtensions
                             context.Token = accessToken;
 
                         return Task.CompletedTask;
+                    },
+                    OnTokenValidated = async context =>
+                    {
+                        // A valid JWT signature alone does not establish a live game session.
+                        // Recheck server-side revocation on every authenticated launcher request.
+                        if (context.Principal?.HasClaim("gml_session", "1") != true)
+                            return;
+
+                        var raw = context.Request.Headers.Authorization.ToString();
+                        var token = raw.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                            ? raw["Bearer ".Length..].Trim()
+                            : context.Request.Query["access_token"].ToString();
+
+                        var manager = context.HttpContext.RequestServices.GetRequiredService<IGmlManager>();
+                        if (string.IsNullOrEmpty(token)
+                            || await manager.Users.GetUserByAccessToken(token) is null)
+                            context.Fail("Launcher session expired or revoked");
                     }
                 };
             })

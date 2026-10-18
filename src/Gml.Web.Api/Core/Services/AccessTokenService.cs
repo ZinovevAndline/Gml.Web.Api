@@ -100,8 +100,13 @@ public class AccessTokenService : IAccessTokenService
         var claims = new List<Claim>
         {
             new("sub", subject),
-            new(ClaimTypes.NameIdentifier, subject)
+            new(ClaimTypes.NameIdentifier, subject),
+            // Always distinguish sessions created in the same second.
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString("N"))
         };
+
+        if (Guid.TryParse(subject, out _) && (roles?.Contains("Player") ?? false))
+            claims.Add(new Claim("gml_session", "1"));
 
         if (!string.IsNullOrWhiteSpace(userLogin))
             claims.Add(new Claim(ClaimTypes.Name, userLogin));

@@ -570,6 +570,20 @@ public static class EndpointsExtensions
             .Produces<ResponseMessage<PlayerReadDto>>()
             .Produces<ResponseMessage>((int)HttpStatusCode.BadRequest);
 
+        app.MapGet("/api/v1/integrations/auth/sessions", AuthIntegrationHandler.GetLauncherSessions)
+            .WithTags("Integration/Auth")
+            .RequireAuthorization(policy => policy.RequireClaim("gml_session", "1"));
+
+        app.MapPost("/api/v1/integrations/auth/sessions/{sessionId}/revoke",
+                AuthIntegrationHandler.RevokeLauncherSession)
+            .WithTags("Integration/Auth")
+            .RequireAuthorization(policy => policy.RequireClaim("gml_session", "1"));
+
+        app.MapPost("/api/v1/integrations/auth/sessions/revoke-all",
+                AuthIntegrationHandler.RevokeAllLauncherSessions)
+            .WithTags("Integration/Auth")
+            .RequireAuthorization(policy => policy.RequireClaim("gml_session", "1"));
+
         app.MapPut("/api/v1/integrations/auth", AuthIntegrationHandler.SetAuthService)
             .WithOpenApi(generatedOperation =>
             {
