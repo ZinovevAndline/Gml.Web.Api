@@ -223,6 +223,7 @@ public static class ApplicationExtensions
             .AddTransient<UnicoreCMSAuthService>()
             .AddTransient<EasyCabinetAuthService>()
             .AddTransient<CustomEndpointAuthService>()
+            .AddTransient<AndlineAuthService>()
             .AddTransient<NamelessMCAuthService>()
             .AddTransient<WebMCRAuthService>()
             .AddTransient<AzuriomAuthService>()
@@ -232,6 +233,14 @@ public static class ApplicationExtensions
             .RegisterValidators()
             .RegisterCors(settings.PolicyName)
             .AddSignalR();
+
+        // Never forward credentials to redirects from the configured ANDLINE origin.
+        builder.Services.AddHttpClient("andline-auth")
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+                UseCookies = false
+            });
 
         builder.Services.AddAuthorization();
 
