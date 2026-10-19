@@ -63,18 +63,22 @@ public static class LauncherSourceUpdater
                 StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Исходники подключены к другому GitHub-репозиторию. Обновление отменено.");
 
-        // The panel itself changes this tracked file when configuring a
-        // downloaded launcher. Preserve its connection settings during refresh,
-        // but continue to reject every other tracked change (incl. submodules).
-        // Never reset, clean or silently overwrite an actual source-code patch.
+        // The panel rewrites ResourceKeysDictionary.cs for this installation.
+        // Submodule worktrees also look dirty after a build or on a volume that
+        // does not keep file modes. Those are not source patches. A real edit
+        // of any other tracked launcher file still stops the refresh.
         var changes = await GitAsync(cancellationToken,
-            "-C", source, "status", "--porcelain", "--untracked-files=no",
-            "--", ".", ":(exclude)src/Gml.Launcher/Assets/Resources/ResourceKeysDictionary.cs");
-        if (!string.IsNullOrWhiteSpace(changes))
+            "-c", "core.filemode=false",
+            "-C", source, "diff", "--ignore-cr-at-eol", "--ignore-submodules=dirty",
+            "--name-only", "HEAD");
+        var blocking = SelectBlockingEdits(changes);
+        if (blocking.Count > 0)
         {
-            Console.Error.WriteLine("[launcher-refresh] Other tracked edits: " + changes.Trim());
+            Console.Error.WriteLine("[launcher-refresh] Other tracked edits: " + string.Join(", ", blocking));
+            var listed = string.Join(", ", blocking.Take(8));
+            var more = blocking.Count > 8 ? $" и ещё {blocking.Count - 8}" : "";
             throw new InvalidOperationException(
-                "Есть изменения в коде лаунчера. Сохраните их перед обновлением — настройки подключения сохранятся автоматически.");
+                $"Есть изменения в коде лаунчера: {listed}{more}. Сохраните их перед обновлением — настройки подключения сохранятся автоматически.");
         }
 
         // Whitelisting the file path alone could hide real C# edits inside
@@ -158,6 +162,29 @@ public static class LauncherSourceUpdater
             if (Directory.Exists(stage))
                 Directory.Delete(stage, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// Paths that must not block a source refresh. Connection settings are copied
+    /// onto the new tree; submodule checkouts are replaced from master.
+    /// </summary>
+    public static IReadOnlyList<string> SelectBlockingEdits(string gitNames)
+    {
+        var ignored =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "src/Gml.Client",
+                "src/GamerVII.Notification.Avalonia",
+                "src/Gml.Launcher/Assets/Resources/ResourceKeysDictionary.cs"
+            };
+
+        return gitNames
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(path => path.Trim().Trim('"').Replace('\\', '/'))
+            .Where(path => path.Length > 0 && !ignored.Contains(path))
+            .Where(path => !path.EndsWith("/ResourceKeysDictionary.cs", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static async Task PreserveLauncherSettings(
