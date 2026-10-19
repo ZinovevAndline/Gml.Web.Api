@@ -172,35 +172,9 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
             if (player is not AuthUser launcherUser)
                 return Results.Unauthorized();
 
-            var now = DateTime.UtcNow;
-            var token = accessTokenService.GenerateAccessToken(
-                player.Uuid,
-                player.Name,
-                player.Name,
-                ["Player"], ["profiles.view", "integrations.news.view"], 60 * 24 * 10);
+            IssueLauncherJwt(accessTokenService, launcherUser, hwid,
+                userAgent, context.ParseRemoteAddress()?.ToString());
 
-            launcherUser.LauncherAuthSessions ??= [];
-            launcherUser.LauncherAuthSessions.RemoveAll(entry => entry.ExpiresAtUtc <= now);
-            launcherUser.LauncherAuthSessions.Add(new LauncherAuthSession
-            {
-                SessionId = Guid.NewGuid().ToString("N"),
-                TokenHash = HashToken(token),
-                DeviceHash = HashToken(hwid),
-                DeviceName = userAgent.Length > 160 ? userAgent[..160] : userAgent,
-                IpAddress = context.ParseRemoteAddress()?.ToString(),
-                LastSeenAtUtc = now,
-                CreatedAtUtc = now,
-                ExpiresAtUtc = now.AddDays(10)
-            });
-            // Prevent unbounded growth from malicious or broken clients.
-            if (launcherUser.LauncherAuthSessions.Count > 40)
-            {
-                var retained = launcherUser.LauncherAuthSessions
-                    .OrderByDescending(entry => entry.CreatedAtUtc).Take(40).ToList();
-                launcherUser.LauncherAuthSessions = retained;
-            }
-
-            player.AccessToken = token;
             // Persist the authorization decision before fetching optional skins;
             // skin providers may be unavailable and must not lose a live session.
                 await gmlManager.Users.UpdateUser(player);
@@ -274,6 +248,59 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
         }
     }
 
+
+    /// <summary>Single JWT issuer shared by password and browser device sign-in.</summary>
+    private static void IssueLauncherJwt(
+        IAccessTokenService tokenService, AuthUser user, string hwid,
+        string deviceName, string? remoteIp)
+    {
+        var now = DateTime.UtcNow;
+        var token = tokenService.GenerateAccessToken(
+            user.Uuid, user.Name, user.Name,
+            ["Player"], ["profiles.view", "integrations.news.view"], 60 * 24 * 10);
+        user.LauncherAuthSessions ??= [];
+        user.LauncherAuthSessions.RemoveAll(entry => entry.ExpiresAtUtc <= now);
+        user.LauncherAuthSessions.Add(new LauncherAuthSession
+        {
+            SessionId = Guid.NewGuid().ToString("N"),
+            TokenHash = HashToken(token),
+            DeviceHash = HashToken(hwid),
+            DeviceName = deviceName.Length > 160 ? deviceName[..160] : deviceName,
+            IpAddress = remoteIp,
+            LastSeenAtUtc = now,
+            CreatedAtUtc = now,
+            ExpiresAtUtc = now.AddDays(10)
+        });
+        if (user.LauncherAuthSessions.Count > 40)
+            user.LauncherAuthSessions = user.LauncherAuthSessions
+                .OrderByDescending(entry => entry.CreatedAtUtc).Take(40).ToList();
+        user.AccessToken = token;
+    }
+
+    // Only BrowserLauncherAuthHandler calls this after the HMAC-authenticated
+    // site decision and proof of the original 256-bit device secret.
+    internal static async Task<IResult?> CompleteBrowserSignInAsync(
+        HttpContext context, IGmlManager manager, IAccessTokenService tokens,
+        IMapper mapper, string username, string uuid, string hwid, string device)
+    {
+        if (!Guid.TryParse(uuid, out var identity)) return null;
+        var stripe = SessionLockForUuid(identity);
+        await stripe.WaitAsync(context.RequestAborted);
+        try
+        {
+            // GetAuthData creates or reconciles the canonical GML player record.
+            var player = await manager.Users.GetAuthData(
+                username, string.Empty, device, context.Request.Protocol,
+                context.ParseRemoteAddress(), uuid, hwid, false);
+            if (player is not AuthUser authUser || authUser.IsBanned
+                || !Guid.TryParse(authUser.Uuid, out var actual) || actual != identity)
+                return null;
+            IssueLauncherJwt(tokens, authUser, hwid, device, context.ParseRemoteAddress()?.ToString());
+            await manager.Users.UpdateUser(authUser);
+            return await HandleAuthenticatedUser(context, manager, mapper, authUser, device);
+        }
+        finally { stripe.Release(); }
+    }
 
     private static string HashToken(string token) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
