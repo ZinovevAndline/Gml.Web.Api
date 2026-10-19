@@ -23,6 +23,9 @@ public static class AndlineLauncherSessionHandler
     {
         public string? Uuid { get; set; }
         public string? SessionId { get; set; }
+        public string? FlowId { get; set; }
+        public string? Code { get; set; }
+        public string? Username { get; set; }
     }
 
     public static async Task<IResult> Execute(
@@ -32,7 +35,7 @@ public static class AndlineLauncherSessionHandler
         IHubContext<LauncherHub> hub,
         string action)
     {
-        if (action is not ("list" or "revoke" or "revoke-all"))
+        if (action is not ("list" or "revoke" or "revoke-all" or "browser-inspect" or "browser-approve"))
             return Results.NotFound();
 
         var secret = Environment.GetEnvironmentVariable("ANDLINE_GML_SESSION_SECRET");
@@ -99,6 +102,13 @@ public static class AndlineLauncherSessionHandler
         if (input is null || !Guid.TryParse(input.Uuid, out var playerUuid)
             || playerUuid == Guid.Empty)
             return Results.BadRequest();
+
+        if (action == "browser-inspect")
+            return BrowserLauncherAuthHandler.Inspect(input.FlowId, input.Code);
+
+        if (action == "browser-approve")
+            return BrowserLauncherAuthHandler.Approve(
+                input.FlowId, input.Code, input.Username, input.Uuid);
 
         // Serialize revocations with sign-in and last-seen updates, otherwise
         // an activity heartbeat can overwrite a recently revoked bearer.
