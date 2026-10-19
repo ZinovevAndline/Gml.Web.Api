@@ -112,8 +112,10 @@ public static class AndlineLauncherSessionHandler
 
         // Serialize revocations with sign-in and last-seen updates, otherwise
         // an activity heartbeat can overwrite a recently revoked bearer.
-        var stripe = action == "list" ? null : AuthIntegrationHandler.SessionLockForUuid(playerUuid);
-        if (stripe is not null) await stripe.WaitAsync(context.RequestAborted);
+        // Listing also requires a consistent account snapshot. Without this
+        // lock, a concurrent logout may race the display of active tokens.
+        var stripe = AuthIntegrationHandler.SessionLockForUuid(playerUuid);
+        await stripe.WaitAsync(context.RequestAborted);
         try
         {
             if (action == "revoke-all")
