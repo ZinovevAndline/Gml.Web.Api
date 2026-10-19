@@ -1,4 +1,8 @@
 using Gml.Web.Api.Core.Hubs.Controllers;
+using Gml.Models.User;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using GmlCore.Interfaces;
 using Microsoft.AspNetCore.SignalR;
 
@@ -30,21 +34,35 @@ public class LauncherHub : BaseHub
         });
     }
 
+    // A distinct group per signed bearer, never per nickname or IP.
+    public static string SessionGroup(string tokenHash) => "launcher-session:" + tokenHash;
+
     public void ConfirmLauncherHash(string hash)
     {
         _playerController.ConfirmLauncherHash(Context.ConnectionId, hash);
     }
 
-    public override Task OnConnectedAsync()
+    public override async Task OnConnectedAsync()
     {
-        if (Context.User is null)
+        // JWT signature verification alone is insufficient after revocation.
+        // Require the bearer to be present in the active server-side session table.
+        var token = Context.GetHttpContext()?.Request.Query["access_token"].ToString();
+        var expectedUuid = Context.User?.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrWhiteSpace(token)
+            || string.IsNullOrWhiteSpace(expectedUuid)
+            || await _gmlManager.Users.GetUserByAccessToken(token) is not AuthUser active
+            || !Guid.TryParse(active.Uuid, out var activeUuid)
+            || !Guid.TryParse(expectedUuid, out var claimUuid)
+            || activeUuid != claimUuid)
         {
-            return Task.CompletedTask;
+            Context.Abort();
+            return;
         }
 
-        _ = _playerController.AddLauncherConnection(Context.ConnectionId, Clients.Caller, Context.User);
-
-        return base.OnConnectedAsync();
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+        await Groups.AddToGroupAsync(Context.ConnectionId, SessionGroup(hash));
+        await _playerController.AddLauncherConnection(Context.ConnectionId, Clients.Caller, Context.User!);
+        await base.OnConnectedAsync();
     }
 
     public override Task OnDisconnectedAsync(Exception? exception)

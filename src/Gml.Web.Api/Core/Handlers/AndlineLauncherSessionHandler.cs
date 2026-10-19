@@ -4,6 +4,8 @@ using System.Text;
 using System.Text.Json;
 using Gml.Models.User;
 using GmlCore.Interfaces;
+using Gml.Web.Api.Core.Hubs;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Caching.Memory;
 
 namespace Gml.Web.Api.Core.Handlers;
@@ -27,6 +29,7 @@ public static class AndlineLauncherSessionHandler
         HttpContext context,
         IGmlManager manager,
         IMemoryCache cache,
+        IHubContext<LauncherHub> hub,
         string action)
     {
         if (action is not ("list" or "revoke" or "revoke-all"))
@@ -141,6 +144,7 @@ public static class AndlineLauncherSessionHandler
                 return Results.BadRequest();
     
             var found = action == "revoke-all";
+            var revokedHashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var user in users)
             {
                 user.LauncherAuthSessions ??= [];
@@ -154,6 +158,7 @@ public static class AndlineLauncherSessionHandler
                         if (entry.RevokedAtUtc is null)
                         {
                             entry.RevokedAtUtc = now;
+                            revokedHashes.Add(entry.TokenHash);
                             changed = true;
                         }
                     }
@@ -164,6 +169,7 @@ public static class AndlineLauncherSessionHandler
                     {
                         if (entry.RevokedAtUtc is not null) continue;
                         entry.RevokedAtUtc = now;
+                        revokedHashes.Add(entry.TokenHash);
                         changed = true;
                     }
                 }
@@ -178,6 +184,11 @@ public static class AndlineLauncherSessionHandler
             }
     
             if (!found) return Results.NotFound();
+            foreach (var hash in revokedHashes)
+            {
+                try { await hub.Clients.Group(LauncherHub.SessionGroup(hash)).SendAsync("SessionRevoked"); }
+                catch (Exception) { /* The persisted revoke wins; clients also verify JWT periodically. */ }
+            }
             return Results.Ok(new { ok = true });
         }
         finally

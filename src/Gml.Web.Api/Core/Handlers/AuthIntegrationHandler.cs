@@ -10,6 +10,8 @@ using Gml.Dto.Messages;
 using Gml.Dto.Player;
 using Gml.Dto.User;
 using Gml.Web.Api.Core.Extensions;
+using Gml.Web.Api.Core.Hubs;
+using Microsoft.AspNetCore.SignalR;
 using Gml.Web.Api.Core.Integrations.Auth;
 using GmlCore.Interfaces;
 using GmlCore.Interfaces.Auth;
@@ -320,7 +322,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
     }
 
     public static async Task<IResult> RevokeLauncherSession(
-        HttpContext context, IGmlManager manager, IAccessTokenService tokens, string sessionId)
+        HttpContext context, IGmlManager manager, IAccessTokenService tokens, IHubContext<LauncherHub> hub, string sessionId)
     {
         var user = await GetCurrentLauncherUser(context, manager, tokens);
         if (user is null)
@@ -338,7 +340,11 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
                 return Results.NotFound(ResponseMessage.Create("Сессия не найдена", HttpStatusCode.NotFound));
 
             target.RevokedAtUtc ??= DateTime.UtcNow;
+            user.PendingJoinTokenHash = null;
+            user.ServerExpiredDate = DateTime.MinValue;
+            user.ServerUuid = string.Empty;
             await manager.Users.UpdateUser(user);
+            await NotifyRevokedAsync(hub, new[] { target.TokenHash });
             return Results.Ok(ResponseMessage.Create("Доступ устройства отключён", HttpStatusCode.OK));
         }
         finally
@@ -348,7 +354,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
     }
 
     public static async Task<IResult> RevokeAllLauncherSessions(
-        HttpContext context, IGmlManager manager, IAccessTokenService tokens)
+        HttpContext context, IGmlManager manager, IAccessTokenService tokens, IHubContext<LauncherHub> hub)
     {
         var user = await GetCurrentLauncherUser(context, manager, tokens);
         if (user is null)
@@ -362,6 +368,8 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
             user = await GetCurrentLauncherUser(context, manager, tokens);
             if (user is null) return Results.Unauthorized();
             var now = DateTime.UtcNow;
+            var revokedHashes = (user.LauncherAuthSessions ?? [])
+                .Where(entry => entry.RevokedAtUtc is null).Select(entry => entry.TokenHash).ToArray();
             foreach (var entry in user.LauncherAuthSessions ?? [])
                 entry.RevokedAtUtc ??= now;
 
@@ -369,6 +377,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
             user.ServerExpiredDate = DateTime.MinValue;
             user.ServerUuid = string.Empty;
             await manager.Users.UpdateUser(user);
+            await NotifyRevokedAsync(hub, revokedHashes);
             return Results.Ok(ResponseMessage.Create("Доступ на всех устройствах отключён", HttpStatusCode.OK));
         }
         finally
@@ -416,7 +425,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
 
     /// <summary>Revoke only the device whose signed bearer accompanies this request.</summary>
     public static async Task<IResult> RevokeCurrentLauncherSession(
-        HttpContext context, IGmlManager manager, IAccessTokenService tokens)
+        HttpContext context, IGmlManager manager, IAccessTokenService tokens, IHubContext<LauncherHub> hub)
     {
         var bearer = context.Request.Headers.Authorization.ToString();
         if (!bearer.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
@@ -449,11 +458,21 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
             user.ServerExpiredDate = DateTime.MinValue;
             user.ServerUuid = string.Empty;
             await manager.Users.UpdateUser(user);
+            await NotifyRevokedAsync(hub, new[] { target.TokenHash });
             return Results.Ok(new { ok = true });
         }
         finally
         {
             stripe.Release();
+        }
+    }
+
+    private static async Task NotifyRevokedAsync(IHubContext<LauncherHub> hub, IEnumerable<string> hashes)
+    {
+        foreach (var hash in hashes.Where(h => !string.IsNullOrEmpty(h)).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try { await hub.Clients.Group(LauncherHub.SessionGroup(hash)).SendAsync("SessionRevoked"); }
+            catch (Exception) { /* Durable server-side revocation remains enforced. */ }
         }
     }
 
