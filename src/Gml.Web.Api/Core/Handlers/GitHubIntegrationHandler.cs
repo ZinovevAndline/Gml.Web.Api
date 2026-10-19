@@ -13,14 +13,33 @@ public class GitHubIntegrationHandler : IGitHubIntegrationHandler
 {
     private const string LauncherGitHubUrl = "https://github.com/ZinovevAndline/Gml.Launcher.git";
 
-    public static async Task<IResult> GetVersions(IGitHubService gitHubService)
+    public static async Task<IResult> GetVersions(IGitHubService gitHubService, IGmlManager manager)
     {
-        var versions = await gitHubService.GetRepositoryTags("ZinovevAndline", "Gml.Launcher");
+        var launcherDirectory = Path.Combine(manager.LauncherInfo.InstallationDirectory, "Launcher");
+        var installed = Directory.Exists(launcherDirectory)
+            ? Directory.GetDirectories(launcherDirectory)
+                .Where(path => Directory.Exists(Path.Combine(path, ".git"))
+                    && File.Exists(Path.Combine(path, "src", "Gml.Launcher", "Gml.Launcher.csproj")))
+                .Select(Path.GetFileName)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Select(name => name!)
+            : Enumerable.Empty<string>();
 
-        var versionsDtos = versions.Select(c => new LauncherVersionReadDto
+        IEnumerable<string> remote;
+        try
         {
-            Version = c
-        });
+            remote = await gitHubService.GetRepositoryTags("ZinovevAndline", "Gml.Launcher");
+        }
+        catch (Exception) when (Directory.Exists(launcherDirectory) && installed.Any())
+        {
+            // Already downloaded versions remain buildable if GitHub is temporarily unavailable.
+            remote = [];
+        }
+
+        var versionsDtos = installed.Concat(remote)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .Select(name => new LauncherVersionReadDto { Version = name });
 
         return Results.Ok(ResponseMessage.Create(versionsDtos, "Список версий успешно получен", HttpStatusCode.OK));
     }
