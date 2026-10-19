@@ -344,7 +344,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
                 || !Guid.TryParse(authUser.Uuid, out var actual) || actual != identity)
                 return null;
             IssueLauncherJwt(tokens, authUser, hwid, device, context.ParseRemoteAddress()?.ToString(),
-                context.Request.Headers["X-Andline-Device-Info"].ToString());
+                hardwareSummary);
             await manager.Users.UpdateUser(authUser);
             return await HandleAuthenticatedUser(context, manager, mapper, authUser, device);
         }
