@@ -413,16 +413,26 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
         {
             user = await GetCurrentLauncherUser(context, manager, tokens);
             if (user is null) return Results.Unauthorized();
-            var target = user.LauncherAuthSessions?.FirstOrDefault(entry => entry.SessionId == sessionId);
-            if (target is null)
+            // Match canonical UUID across historical case-variant profile
+            // rows; otherwise a duplicate row can retain a valid JWT.
+            var matching = (await manager.Users.GetUsers()).OfType<AuthUser>()
+                .Where(row => Guid.TryParse(row.Uuid, out var id) && id == uuid).ToArray();
+            var hashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var row in matching)
+            {
+                var target = row.LauncherAuthSessions?.FirstOrDefault(entry =>
+                    string.Equals(entry.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
+                if (target is null) continue;
+                target.RevokedAtUtc ??= DateTime.UtcNow;
+                hashes.Add(target.TokenHash);
+                row.PendingJoinTokenHash = null;
+                row.ServerExpiredDate = DateTime.MinValue;
+                row.ServerUuid = string.Empty;
+                await manager.Users.UpdateUser(row);
+            }
+            if (hashes.Count == 0)
                 return Results.NotFound(ResponseMessage.Create("Сессия не найдена", HttpStatusCode.NotFound));
-
-            target.RevokedAtUtc ??= DateTime.UtcNow;
-            user.PendingJoinTokenHash = null;
-            user.ServerExpiredDate = DateTime.MinValue;
-            user.ServerUuid = string.Empty;
-            await manager.Users.UpdateUser(user);
-            await NotifyRevokedAsync(hub, new[] { target.TokenHash });
+            await NotifyRevokedAsync(hub, hashes);
             return Results.Ok(ResponseMessage.Create("Доступ устройства отключён", HttpStatusCode.OK));
         }
         finally
@@ -447,15 +457,22 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
             if (user is null) return Results.Unauthorized();
             BrowserLauncherAuthHandler.CancelPendingForUser(uuid);
             var now = DateTime.UtcNow;
-            var revokedHashes = (user.LauncherAuthSessions ?? [])
-                .Where(entry => entry.RevokedAtUtc is null).Select(entry => entry.TokenHash).ToArray();
-            foreach (var entry in user.LauncherAuthSessions ?? [])
-                entry.RevokedAtUtc ??= now;
-
-            user.PendingJoinTokenHash = null;
-            user.ServerExpiredDate = DateTime.MinValue;
-            user.ServerUuid = string.Empty;
-            await manager.Users.UpdateUser(user);
+            var revokedHashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var matching = (await manager.Users.GetUsers()).OfType<AuthUser>()
+                .Where(row => Guid.TryParse(row.Uuid, out var id) && id == uuid).ToArray();
+            foreach (var row in matching)
+            {
+                foreach (var entry in row.LauncherAuthSessions ?? [])
+                {
+                    if (entry.RevokedAtUtc is not null) continue;
+                    entry.RevokedAtUtc = now;
+                    revokedHashes.Add(entry.TokenHash);
+                }
+                row.PendingJoinTokenHash = null;
+                row.ServerExpiredDate = DateTime.MinValue;
+                row.ServerUuid = string.Empty;
+                await manager.Users.UpdateUser(row);
+            }
             await NotifyRevokedAsync(hub, revokedHashes);
             return Results.Ok(ResponseMessage.Create("Доступ на всех устройствах отключён", HttpStatusCode.OK));
         }
