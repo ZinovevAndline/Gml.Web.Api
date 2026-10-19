@@ -116,6 +116,8 @@ public static class AndlineLauncherSessionHandler
         if (stripe is not null) await stripe.WaitAsync(context.RequestAborted);
         try
         {
+            if (action == "revoke-all")
+                BrowserLauncherAuthHandler.CancelPendingForUser(playerUuid);
             // Old GML data can contain multiple Login primary keys associated
             // with one canonical player UUID. A single GetUserByUuid() returns the
             // first row (which may have no current tokens), hiding newly created
