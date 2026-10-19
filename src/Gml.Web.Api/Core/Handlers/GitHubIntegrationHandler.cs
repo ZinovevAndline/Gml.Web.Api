@@ -11,11 +11,11 @@ namespace Gml.Web.Api.Core.Handlers;
 
 public class GitHubIntegrationHandler : IGitHubIntegrationHandler
 {
-    private const string LauncherGitHubUrl = "https://github.com/Gml-Launcher/Gml.Backend.git";
+    private const string LauncherGitHubUrl = "https://github.com/ZinovevAndline/Gml.Launcher.git";
 
     public static async Task<IResult> GetVersions(IGitHubService gitHubService)
     {
-        var versions = await gitHubService.GetRepositoryTags("Gml-Launcher", "Gml.Launcher");
+        var versions = await gitHubService.GetRepositoryTags("ZinovevAndline", "Gml.Launcher");
 
         var versionsDtos = versions.Select(c => new LauncherVersionReadDto
         {
