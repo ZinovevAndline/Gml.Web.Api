@@ -329,13 +329,15 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
     // site decision and proof of the original 256-bit device secret.
     internal static async Task<IResult?> CompleteBrowserSignInAsync(
         HttpContext context, IGmlManager manager, IAccessTokenService tokens,
-        IMapper mapper, string username, string uuid, string hwid, string device, string? hardwareSummary)
+        IMapper mapper, string username, string uuid, string hwid, string device, string? hardwareSummary, DateTimeOffset flowStartedAt)
     {
         if (!Guid.TryParse(uuid, out var identity)) return null;
         var stripe = SessionLockForUuid(identity);
         await stripe.WaitAsync(context.RequestAborted);
         try
         {
+            if (BrowserLauncherAuthHandler.IsRevokedSince(identity, flowStartedAt))
+                return null;
             // GetAuthData creates or reconciles the canonical GML player record.
             var player = await manager.Users.GetAuthData(
                 username, string.Empty, device, context.Request.Protocol,
