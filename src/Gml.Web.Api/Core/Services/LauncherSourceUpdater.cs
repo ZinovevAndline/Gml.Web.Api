@@ -17,6 +17,26 @@ public static class LauncherSourceUpdater
         "public\\s+const\\s+string\\s+(?<name>[A-Za-z][A-Za-z0-9_]*)\\s*=\\s*\\\"(?<value>(?:\\\\.|[^\\\"\\\\])*)\\\"\\s*;",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    // Only these per-instance constants may legitimately differ from the
+    // checked-in source/template when the GML Web panel configures a build.
+    private static readonly HashSet<string> ManagedSettings = new(StringComparer.Ordinal)
+    {
+        "Host", "SecondaryHost", "FolderName", "WebsiteUrl", "SiteApiUrl",
+        "GmlSessionToken", "DiscordUrl", "TelegramUrl", "DonateUrl",
+        "SupportUrl", "LeaderboardUrl"
+    };
+
+    private static string WithoutManagedValues(string content) =>
+        ResourceConstant.Replace(content, match =>
+        {
+            if (!ManagedSettings.Contains(match.Groups["name"].Value))
+                return match.Value;
+            var value = match.Groups["value"];
+            var offset = value.Index - match.Index;
+            return match.Value[..offset] + "<ANDLINE-CONFIG>"
+                + match.Value[(offset + value.Length)..];
+        });
+
     public static async Task<string> RefreshAsync(
         string installationDirectory, string version, CancellationToken cancellationToken)
     {
@@ -55,6 +75,34 @@ public static class LauncherSourceUpdater
             Console.Error.WriteLine("[launcher-refresh] Other tracked edits: " + changes.Trim());
             throw new InvalidOperationException(
                 "Есть изменения в коде лаунчера. Сохраните их перед обновлением — настройки подключения сохранятся автоматически.");
+        }
+
+        // Whitelisting the file path alone could hide real C# edits inside
+        // ResourceKeysDictionary.cs. Accept ONLY changed values of known
+        // connection parameters, against either a checked-in file or the
+        // GML Web generated template. Everything else must be saved manually.
+        var configStatus = await GitAsync(cancellationToken,
+            "-C", source, "status", "--porcelain", "--untracked-files=no", "--",
+            "src/Gml.Launcher/Assets/Resources/ResourceKeysDictionary.cs");
+        if (!string.IsNullOrWhiteSpace(configStatus))
+        {
+            var templatePath = Path.Combine(source, "src", "Gml.Launcher",
+                "Assets", "Resources", "ResourceKeysDictionary.Template.cs");
+            var originalFromGit = await GitAsync(cancellationToken, "-C", source,
+                "show", "HEAD:src/Gml.Launcher/Assets/Resources/ResourceKeysDictionary.cs");
+            var configured = WithoutManagedValues(
+                await File.ReadAllTextAsync(originalConfig, cancellationToken));
+            var accepted = string.Equals(configured, WithoutManagedValues(originalFromGit),
+                               StringComparison.Ordinal)
+                           || File.Exists(templatePath)
+                           && string.Equals(configured, WithoutManagedValues(
+                                   await File.ReadAllTextAsync(templatePath, cancellationToken)),
+                               StringComparison.Ordinal);
+            // Staged deletion, rename, or type change is not a panel setting.
+            var changeKind = configStatus.TrimStart();
+            if (!accepted || !changeKind.StartsWith("M", StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "В файле настроек лаунчера изменён код. Сохраните правки перед обновлением.");
         }
 
         var currentSha = (await GitAsync(cancellationToken, "-C", source, "rev-parse", "HEAD")).Trim();
@@ -133,12 +181,6 @@ public static class LauncherSourceUpdater
                 match => match.Groups["value"].Value, StringComparer.Ordinal);
 
         // Only replace per-instance parameters; leave newer application strings intact.
-        var settings = new HashSet<string>(StringComparer.Ordinal)
-        {
-            "Host", "SecondaryHost", "FolderName", "WebsiteUrl", "SiteApiUrl",
-            "GmlSessionToken", "DiscordUrl", "TelegramUrl", "DonateUrl",
-            "SupportUrl", "LeaderboardUrl"
-        };
         // Host/folder are essential; new optional settings may appear in later versions.
         if (!oldValues.ContainsKey("Host") || !oldValues.ContainsKey("FolderName"))
             throw new InvalidOperationException(
@@ -147,7 +189,7 @@ public static class LauncherSourceUpdater
         var updated = ResourceConstant.Replace(template, match =>
         {
             var key = match.Groups["name"].Value;
-            if (!settings.Contains(key))
+            if (!ManagedSettings.Contains(key))
                 return match.Value;
             oldValues.TryGetValue(key, out var value);
             if (string.IsNullOrWhiteSpace(value)
