@@ -445,6 +445,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
         {
             user = await GetCurrentLauncherUser(context, manager, tokens);
             if (user is null) return Results.Unauthorized();
+            BrowserLauncherAuthHandler.CancelPendingForUser(uuid);
             var now = DateTime.UtcNow;
             var revokedHashes = (user.LauncherAuthSessions ?? [])
                 .Where(entry => entry.RevokedAtUtc is null).Select(entry => entry.TokenHash).ToArray();
