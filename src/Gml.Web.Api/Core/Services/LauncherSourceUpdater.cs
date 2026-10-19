@@ -165,16 +165,15 @@ public static class LauncherSourceUpdater
     }
 
     /// <summary>
-    /// Paths that must not block a source refresh. Connection settings are copied
-    /// onto the new tree; submodule checkouts are replaced from master.
+    /// Paths reported by git that still block a refresh. The panel settings file
+    /// is checked separately, so only known connection values are allowed there.
+    /// A submodule path in this list is a changed commit, not a dirty worktree.
     /// </summary>
     public static IReadOnlyList<string> SelectBlockingEdits(string gitNames)
     {
         var ignored =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                "src/Gml.Client",
-                "src/GamerVII.Notification.Avalonia",
                 "src/Gml.Launcher/Assets/Resources/ResourceKeysDictionary.cs"
             };
 
