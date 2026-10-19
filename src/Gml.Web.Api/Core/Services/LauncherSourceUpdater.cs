@@ -35,8 +35,10 @@ public static class LauncherSourceUpdater
 
         // Refuse locally edited tracked files instead of silently discarding custom patches.
         var remote = (await GitAsync(cancellationToken, "-C", source, "remote", "get-url", "origin")).Trim();
-        if (!string.Equals(remote.TrimEnd('/').TrimEnd('.','g','i','t'),
-                RepositoryUrl[..^4], StringComparison.OrdinalIgnoreCase))
+        var normalizedRemote = remote.TrimEnd('/');
+        if (normalizedRemote.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+            normalizedRemote = normalizedRemote[..^4];
+        if (!string.Equals(normalizedRemote, RepositoryUrl[..^4], StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Исходники подключены к другому GitHub-репозиторию. Обновление отменено.");
 
         var changes = await GitAsync(cancellationToken, "-C", source, "status", "--porcelain", "--untracked-files=no");
@@ -117,13 +119,10 @@ public static class LauncherSourceUpdater
             "GmlSessionToken", "DiscordUrl", "TelegramUrl", "DonateUrl",
             "SupportUrl", "LeaderboardUrl"
         };
-        foreach (var key in settings)
-        {
-            if (!oldValues.ContainsKey(key) || !ResourceConstant.Matches(template)
-                    .Any(match => match.Groups["name"].Value == key))
-                throw new InvalidOperationException(
-                    "Настройки исходников несовместимы с новой версией. Рабочие файлы не затронуты.");
-        }
+        // Host/folder are essential; new optional settings may appear in later versions.
+        if (!oldValues.ContainsKey("Host") || !oldValues.ContainsKey("FolderName"))
+            throw new InvalidOperationException(
+                "Не удалось восстановить адрес API или папку клиента. Исходники не изменены.");
 
         var updated = ResourceConstant.Replace(template, match =>
         {
