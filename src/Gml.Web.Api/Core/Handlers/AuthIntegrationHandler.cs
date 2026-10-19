@@ -382,8 +382,13 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
         var bearer = context.Request.Headers.Authorization.ToString()["Bearer ".Length..].Trim();
         var currentHash = HashToken(bearer);
         var now = DateTime.UtcNow;
-        var sessions = (user.LauncherAuthSessions ?? [])
+        if (!Guid.TryParse(user.Uuid, out var canonicalId)) return Results.Unauthorized();
+        var sessions = (await manager.Users.GetUsers()).OfType<AuthUser>()
+            .Where(row => Guid.TryParse(row.Uuid, out var rowId) && rowId == canonicalId)
+            .SelectMany(row => row.LauncherAuthSessions ?? [])
             .Where(entry => entry.RevokedAtUtc is null && entry.ExpiresAtUtc > now)
+            .GroupBy(entry => entry.SessionId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.OrderByDescending(entry => entry.CreatedAtUtc).First())
             .OrderByDescending(entry => entry.CreatedAtUtc)
             .Select(entry => new
             {
