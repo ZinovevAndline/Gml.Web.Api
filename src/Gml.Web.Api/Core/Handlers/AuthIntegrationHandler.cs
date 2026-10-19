@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Gml.Models.Sessions;
 using Gml.Models.User;
 using MapsterMapper;
@@ -173,7 +174,8 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
                 return Results.Unauthorized();
 
             IssueLauncherJwt(accessTokenService, launcherUser, hwid,
-                userAgent, context.ParseRemoteAddress()?.ToString());
+                userAgent, context.ParseRemoteAddress()?.ToString(),
+                context.Request.Headers["X-Andline-Device-Info"].ToString());
 
             // Persist the authorization decision before fetching optional skins;
             // skin providers may be unavailable and must not lose a live session.
@@ -252,14 +254,16 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
     /// <summary>Single JWT issuer shared by password and browser device sign-in.</summary>
     private static void IssueLauncherJwt(
         IAccessTokenService tokenService, AuthUser user, string hwid,
-        string deviceName, string? remoteIp)
+        string deviceName, string? remoteIp, string? requestDeviceSummary)
     {
         var now = DateTime.UtcNow;
         var token = tokenService.GenerateAccessToken(
             user.Uuid, user.Name, user.Name,
             ["Player"], ["profiles.view", "integrations.news.view"], 60 * 24 * 10);
         user.LauncherAuthSessions ??= [];
-        user.LauncherAuthSessions.RemoveAll(entry => entry.ExpiresAtUtc <= now);
+        // Keep a limited 90-day security history, including expired and
+        // explicitly revoked sessions, for legitimate support investigations.
+        user.LauncherAuthSessions.RemoveAll(entry => entry.CreatedAtUtc < now.AddDays(-90));
         user.LauncherAuthSessions.Add(new LauncherAuthSession
         {
             SessionId = Guid.NewGuid().ToString("N"),
@@ -271,10 +275,54 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
             CreatedAtUtc = now,
             ExpiresAtUtc = now.AddDays(10)
         });
-        if (user.LauncherAuthSessions.Count > 40)
+        var latest = user.LauncherAuthSessions[^1];
+        ApplyHardwareSummary(latest, requestDeviceSummary);
+        // Protect the SQLite account row from unbounded historical growth.
+        if (user.LauncherAuthSessions.Count > 240)
             user.LauncherAuthSessions = user.LauncherAuthSessions
-                .OrderByDescending(entry => entry.CreatedAtUtc).Take(40).ToList();
+                .OrderByDescending(entry => entry.CreatedAtUtc).Take(240).ToList();
         user.AccessToken = token;
+    }
+
+    private static void ApplyHardwareSummary(LauncherAuthSession session, string? value)
+    {
+        // The client can describe its hardware, but never use these attributes
+        // for authorization. Reject oversized/malformed metadata without
+        // interrupting a legitimate login.
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 2200) return;
+        try
+        {
+            var bytes = Convert.FromBase64String(value);
+            if (bytes.Length > 1600) return;
+            using var doc = JsonDocument.Parse(bytes);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return;
+            string? Get(string key, int max)
+            {
+                if (!doc.RootElement.TryGetProperty(key, out var property)
+                    || property.ValueKind != JsonValueKind.String) return null;
+                var text = property.GetString()?.Trim();
+                if (string.IsNullOrEmpty(text)) return null;
+                // Discard control codes, line breaks and potentially sensitive
+                // URL-like strings; only display descriptive hardware names.
+                text = new string(text.Where(c => !char.IsControl(c)).ToArray());
+                return text.Length > max ? text[..max] : text;
+            }
+            int? Numeric(string key, int max)
+            {
+                return doc.RootElement.TryGetProperty(key, out var property)
+                    && property.ValueKind == JsonValueKind.Number
+                    && property.TryGetInt32(out var number) && number > 0 && number <= max
+                    ? number : null;
+            }
+            session.OperatingSystem = Get("os", 90);
+            session.Architecture = Get("architecture", 30);
+            session.Processor = Get("cpu", 120);
+            session.Graphics = Get("gpu", 120);
+            session.LauncherVersion = Get("launcher_version", 30);
+            session.MemoryGb = Numeric("memory_gb", 2048);
+            session.ProcessorCores = Numeric("logical_processors", 1024);
+        }
+        catch (Exception) { /* Optional device details must never block login. */ }
     }
 
     // Only BrowserLauncherAuthHandler calls this after the HMAC-authenticated
@@ -295,7 +343,8 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
             if (player is not AuthUser authUser || authUser.IsBanned
                 || !Guid.TryParse(authUser.Uuid, out var actual) || actual != identity)
                 return null;
-            IssueLauncherJwt(tokens, authUser, hwid, device, context.ParseRemoteAddress()?.ToString());
+            IssueLauncherJwt(tokens, authUser, hwid, device, context.ParseRemoteAddress()?.ToString(),
+                context.Request.Headers["X-Andline-Device-Info"].ToString());
             await manager.Users.UpdateUser(authUser);
             return await HandleAuthenticatedUser(context, manager, mapper, authUser, device);
         }
