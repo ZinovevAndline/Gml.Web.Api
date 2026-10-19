@@ -329,7 +329,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
     // site decision and proof of the original 256-bit device secret.
     internal static async Task<IResult?> CompleteBrowserSignInAsync(
         HttpContext context, IGmlManager manager, IAccessTokenService tokens,
-        IMapper mapper, string username, string uuid, string hwid, string device)
+        IMapper mapper, string username, string uuid, string hwid, string device, string? hardwareSummary)
     {
         if (!Guid.TryParse(uuid, out var identity)) return null;
         var stripe = SessionLockForUuid(identity);
