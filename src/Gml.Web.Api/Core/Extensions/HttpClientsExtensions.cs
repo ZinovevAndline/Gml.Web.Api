@@ -32,44 +32,27 @@ public static class HttpClientsExtensions
 
     public static IPAddress? ParseRemoteAddress(this HttpContext context)
     {
-        var headers = context.Request.Headers;
+        var peer = context.Connection.RemoteIpAddress;
+        if (peer is null) return null;
 
-        foreach (var headerName in new[] { "CF-Connecting-IP", "True-Client-IP", "X-Real-IP" })
-        {
-            if (headers.TryGetValue(headerName, out var values))
-            {
-                var candidate = values.FirstOrDefault();
-                if (TryParseIp(candidate, out var ip))
-                    return ip;
-            }
-        }
+        // Client-controlled HTTP headers must never override the socket peer.
+        // This service is normally reached via our local YARP reverse proxy.
+        // A non-loopback client or arbitrary private host is not trusted to
+        // assert any original IP address, even if it sends Cloudflare headers.
+        if (!IPAddress.IsLoopback(peer)
+            && !(peer.IsIPv4MappedToIPv6 && IPAddress.IsLoopback(peer.MapToIPv4())))
+            return peer;
 
-        if (headers.TryGetValue("Forwarded", out var forwarded))
-        {
-            var firstForwarded = forwarded.ToString().Split(',')[0];
-            foreach (var part in firstForwarded.Split(';',
-                         StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-            {
-                if (part.StartsWith("for=", StringComparison.OrdinalIgnoreCase))
-                {
-                    var value = part.Substring(4);
-                    if (TryParseIp(value, out var ip))
-                        return ip;
-                }
-            }
-        }
+        // YARP's X-Forwarded-For "Set" transform overwrites incoming values
+        // with the actual upstream socket peer. The single resulting address
+        // is the only supported forwarded identity.
+        var forwarded = context.Request.Headers["X-Forwarded-For"].ToString();
+        if (!string.IsNullOrWhiteSpace(forwarded)
+            && !forwarded.Contains(',')
+            && TryParseIp(forwarded, out var ip))
+            return ip;
 
-        if (headers.TryGetValue("X-Forwarded-For", out var xff) && !string.IsNullOrWhiteSpace(xff))
-        {
-            foreach (var raw in xff.ToString()
-                         .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-            {
-                if (TryParseIp(raw, out var ip))
-                    return ip;
-            }
-        }
-
-        return context.Connection.RemoteIpAddress;
+        return peer;
     }
 
     private static bool TryParseIp(string? value, out IPAddress ip)
