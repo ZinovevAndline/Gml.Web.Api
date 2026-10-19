@@ -7,6 +7,8 @@ using GmlCore.Interfaces;
 using GmlCore.Interfaces.Auth;
 using GmlCore.Interfaces.Enums;
 using MapsterMapper;
+using Microsoft.Extensions.Caching.Memory;
+using Gml.Web.Api.Core.Extensions;
 
 namespace Gml.Web.Api.Core.Handlers;
 
@@ -25,6 +27,7 @@ public static class BrowserLauncherAuthHandler
         public required string Hwid { get; init; }
         public string? HardwareSummary { get; init; }
         public required DateTimeOffset ExpiresAt { get; init; }
+        public required DateTimeOffset CreatedAt { get; init; }
         public string? Username { get; set; }
         public string? Uuid { get; set; }
         public bool Consumed { get; set; }
@@ -35,7 +38,8 @@ public static class BrowserLauncherAuthHandler
         [property: System.Text.Json.Serialization.JsonPropertyName("flow_id")] string? FlowId,
         [property: System.Text.Json.Serialization.JsonPropertyName("device_code")] string? DeviceCode);
     private static readonly ConcurrentDictionary<string, Flow> Flows = new();
-    private static readonly ConcurrentDictionary<string, (int Count, DateTimeOffset Until)> Limits = new();
+    private static readonly ConcurrentDictionary<Guid, DateTimeOffset> Revocations = new();
+    private static readonly object RateLock = new();
 
     private static string Digest(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
@@ -63,8 +67,33 @@ public static class BrowserLauncherAuthHandler
         return true;
     }
 
+    internal static bool IsRevokedSince(Guid account, DateTimeOffset started) =>
+        Revocations.TryGetValue(account, out var revokedAt) && started <= revokedAt;
+
+    /// <summary>
+    /// Called under the same account stripe as JWT revocation and issuance.
+    /// A pending flow cannot mint a fresh token after a password change or
+    /// administrator's revoke-all, even if the browser approved earlier.
+    /// </summary>
+    internal static void CancelPendingForUser(Guid account)
+    {
+        var now = DateTimeOffset.UtcNow;
+        Revocations[account] = now;
+        foreach (var item in Flows)
+        {
+            var flow = item.Value;
+            lock (flow)
+            {
+                if (!Guid.TryParse(flow.Uuid, out var flowOwner) || flowOwner != account)
+                    continue;
+                flow.Consumed = true;
+                Flows.TryRemove(item.Key, out _);
+            }
+        }
+    }
+
     // Public start is rate-limited and issues no authorization.
-    public static async Task<IResult> Start(HttpContext context, IGmlManager manager)
+    public static async Task<IResult> Start(HttpContext context, IGmlManager manager, IMemoryCache cache)
     {
         if (await manager.Integrations.GetAuthType() != AuthType.Andline)
             return Results.StatusCode(409);
@@ -72,19 +101,25 @@ public static class BrowserLauncherAuthHandler
         if (!AndlineAuthUrl.TryNormalize(configured?.Endpoint, out var siteOrigin))
             return Results.StatusCode(503);
 
-        var remote = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var remote = context.ParseRemoteAddress()?.ToString()
+            ?? context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         var now = DateTimeOffset.UtcNow;
-        var count = Limits.AddOrUpdate(remote,
-            _ => (1, now.AddMinutes(1)),
-            (_, prior) => prior.Until < now ? (1, now.AddMinutes(1)) : (prior.Count + 1, prior.Until));
-        if (count.Count > 12) return Results.StatusCode(429);
+        var rateKey = "andline:browser-start:" + remote;
+        lock (RateLock)
+        {
+            var count = cache.TryGetValue<int>(rateKey, out var previous) ? previous : 0;
+            if (count >= 12) return Results.StatusCode(429);
+            // Expiring cache keys avoid an unbounded map of source IPs.
+            cache.Set(rateKey, count + 1, TimeSpan.FromMinutes(1));
+        }
 
-        // The GML deployment has one API process. Cap allocation even if
-        // attackers spoof source IPs; all entries expire in five minutes.
-        if (Flows.Count >= 5000) return Results.StatusCode(429);
-        if (Flows.Count > 100)
-            foreach (var item in Flows)
-                if (item.Value.ExpiresAt <= now) Flows.TryRemove(item.Key, out _);
+        foreach (var item in Flows)
+            if (item.Value.ExpiresAt <= now || item.Value.Consumed)
+                Flows.TryRemove(item.Key, out _);
+        foreach (var item in Revocations)
+            if (now - item.Value > TimeSpan.FromMinutes(6))
+                Revocations.TryRemove(item.Key, out _);
+        if (Flows.Count >= 1200) return Results.StatusCode(429);
 
         var device = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
             .TrimEnd('=').Replace('+', '-').Replace('/', '_');
@@ -98,7 +133,8 @@ public static class BrowserLauncherAuthHandler
             Hwid = context.Request.Headers["X-HWID"].ToString()[..Math.Min(context.Request.Headers["X-HWID"].ToString().Length, 160)],
             DeviceLabel = agent.Length > 160 ? agent[..160] : agent,
             HardwareSummary = context.Request.Headers["X-Andline-Device-Info"].ToString(),
-            ExpiresAt = now.AddMinutes(5)
+            ExpiresAt = now.AddMinutes(5),
+            CreatedAt = now
         };
         Flows[id] = flow;
 
@@ -132,6 +168,7 @@ public static class BrowserLauncherAuthHandler
         lock (flow)
         {
             if (flow.Consumed || flow.ExpiresAt <= DateTimeOffset.UtcNow
+                || IsRevokedSince(id, flow.CreatedAt)
                 || flow.Uuid is not null) return Results.Conflict();
             flow.Username = username;
             flow.Uuid = id.ToString("D");
@@ -172,7 +209,10 @@ public static class BrowserLauncherAuthHandler
         await flow.Gate.WaitAsync(context.RequestAborted);
         try
         {
-            if (flow.Consumed) return Results.StatusCode(410);
+            if (flow.Consumed || flow.ExpiresAt <= DateTimeOffset.UtcNow
+                || flow.Uuid is not null && Guid.TryParse(flow.Uuid, out var accountId)
+                    && IsRevokedSince(accountId, flow.CreatedAt))
+                return Results.StatusCode(410);
             if (flow.Uuid is null || flow.Username is null)
                 return Results.Accepted(value: new { status = "pending" });
             // All identity claims came from the site's authenticated HMAC
@@ -180,7 +220,7 @@ public static class BrowserLauncherAuthHandler
             var result = await AuthIntegrationHandler.CompleteBrowserSignInAsync(
                 context, manager, tokens, mapper,
                 flow.Username, flow.Uuid, flow.Hwid, flow.DeviceLabel,
-                flow.HardwareSummary);
+                flow.HardwareSummary, flow.CreatedAt);
             if (result is null) return Results.StatusCode(503);
             flow.Consumed = true;
             Flows.TryRemove(input.FlowId, out _);
