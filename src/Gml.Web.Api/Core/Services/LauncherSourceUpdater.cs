@@ -120,6 +120,14 @@ public static class LauncherSourceUpdater
 
         var previous = await File.ReadAllTextAsync(existingConfig, token);
         var template = await File.ReadAllTextAsync(templateFile, token);
+        // The repository's checked-in file provides real default endpoints.
+        // Older GML Web downloads only populated HOST/FOLDER_NAME and left
+        // every other template placeholder unresolved. Do not keep those
+        // placeholder strings when transferring an existing configuration.
+        var checkedInDefaults = await File.ReadAllTextAsync(destination, token);
+        var defaultValues = ResourceConstant.Matches(checkedInDefaults)
+            .ToDictionary(match => match.Groups["name"].Value,
+                match => match.Groups["value"].Value, StringComparer.Ordinal);
         var oldValues = ResourceConstant.Matches(previous)
             .ToDictionary(match => match.Groups["name"].Value,
                 match => match.Groups["value"].Value, StringComparer.Ordinal);
@@ -139,10 +147,22 @@ public static class LauncherSourceUpdater
         var updated = ResourceConstant.Replace(template, match =>
         {
             var key = match.Groups["name"].Value;
-            if (!settings.Contains(key) || !oldValues.TryGetValue(key, out var value))
+            if (!settings.Contains(key))
+                return match.Value;
+            oldValues.TryGetValue(key, out var value);
+            if (string.IsNullOrWhiteSpace(value)
+                || value.StartsWith("{{", StringComparison.Ordinal) && value.EndsWith("}}", StringComparison.Ordinal))
+                defaultValues.TryGetValue(key, out value);
+            if (string.IsNullOrWhiteSpace(value))
                 return match.Value;
             return match.Value.Replace(match.Groups["value"].Value, value, StringComparison.Ordinal);
         });
+        // Never deploy a launcher with an unresolved API or site URL.
+        if (updated.Contains("{{HOST}}", StringComparison.Ordinal)
+            || updated.Contains("{{SITE_API_URL}}", StringComparison.Ordinal)
+            || updated.Contains("{{GML_SESSION_TOKEN}}", StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "Не удалось восстановить настройки подключения лаунчера. Исходники не изменены.");
         await File.WriteAllTextAsync(destination, updated, token);
     }
 
