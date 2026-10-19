@@ -75,6 +75,68 @@ public class GitHubLauncherHub(IGitHubService gitHubService, IGmlManager gmlMana
         }
     }
 
+    /// <summary>Remove one downloaded launcher source folder so it can be fetched again.</summary>
+    public async Task DeleteSource(string version)
+    {
+        if (!await SourceOperation.WaitAsync(0))
+            throw new HubException("Дождитесь завершения другой операции с лаунчером.");
+
+        try
+        {
+            if (!IsSafeVersionName(version))
+                throw new HubException("Выберите корректную версию исходников.");
+
+            var installation = gmlManager.LauncherInfo.InstallationDirectory;
+            var root = Path.GetFullPath(Path.Combine(installation, "Launcher"));
+            var target = Path.GetFullPath(Path.Combine(root, version));
+            if (!IsInside(root, target))
+                throw new HubException("Нельзя удалить этот путь.");
+            if (!Directory.Exists(target))
+                throw new HubException("Этой версии нет на сервере. Её можно скачать.");
+
+            Directory.Delete(target, recursive: true);
+
+            var backups = Path.GetFullPath(Path.Combine(installation, "LauncherSourceBackups"));
+            var backup = Path.GetFullPath(Path.Combine(backups, version + "-previous"));
+            if (IsInside(backups, backup) && Directory.Exists(backup))
+                Directory.Delete(backup, recursive: true);
+        }
+        catch (HubException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            throw new HubException("Не удалось удалить исходники. Версия сохранена.");
+        }
+        finally
+        {
+            SourceOperation.Release();
+        }
+    }
+
+    private static bool IsSafeVersionName(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version) || version.Length > 64)
+            return false;
+        if (!char.IsAsciiLetterOrDigit(version[0]))
+            return false;
+        foreach (var character in version)
+        {
+            if (!char.IsAsciiLetterOrDigit(character) && character is not ('.' or '_' or '-'))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsInside(string root, string path)
+    {
+        var prefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                     + Path.DirectorySeparatorChar;
+        return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>Refresh an existing version's sources from the trusted master branch.</summary>
     public async Task<string> RefreshSource(string version)
     {
