@@ -20,16 +20,11 @@ public class FileHandler : IFileHandler
 
         try
         {
-            // response.Headers.Append("Content-Disposition", $"attachment; filename={fileName}");
-            // response.Headers.Append("Content-Length", length.ToString());
-            // response.ContentType = "application/octet-stream";
-            //
-            // await file.CopyToAsync(response.Body);
-
             return Results.File(file, "application/octet-stream", fileName);
         }
         catch (Exception exception)
         {
+            await file.DisposeAsync();
             Console.WriteLine(fileName + exception);
             gmlManager.BugTracker.CaptureException(exception);
         }
