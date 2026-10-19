@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http.Headers;
 using GmlCore.Interfaces;
 using Newtonsoft.Json.Linq;
 
@@ -39,21 +40,22 @@ public class GitHubService : IGitHubService
 
     public async Task<IEnumerable<string>> GetRepositoryTags(string user, string repository)
     {
-        var url = "https://api.github.com/repos/Gml-Launcher/Gml.Launcher/tags";
+        var url = $"https://api.github.com/repos/{user}/{repository}/tags?per_page=100";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.UserAgent.ParseAdd("ANDLINE-GML");
+        var token = Environment.GetEnvironmentVariable("GML_GITHUB_TOKEN");
+        if (!string.IsNullOrWhiteSpace(token))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Trim());
 
-        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("request");
+        using var response = await _httpClient.SendAsync(request);
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException(
+                "Не удалось получить версии ANDLINE Launcher. Проверьте доступ GitHub в настройках сервера.");
 
-        var response = await _httpClient.GetAsync(url);
-
-        if (response.IsSuccessStatusCode)
-        {
-            var responseString = await response.Content.ReadAsStringAsync();
-
-            var branches = JArray.Parse(responseString);
-
-            _versions = branches.Select(c => c["name"].ToString()).ToArray();
-        }
-
+        var content = await response.Content.ReadAsStringAsync();
+        var tags = JArray.Parse(content);
+        _versions = tags.Select(tag => tag["name"]?.ToString() ?? string.Empty)
+            .Where(name => !string.IsNullOrWhiteSpace(name)).ToArray();
         return _versions;
     }
 
