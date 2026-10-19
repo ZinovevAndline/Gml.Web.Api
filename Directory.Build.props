@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <WarningLevel>0</WarningLevel>
+    <NuGetAudit>false</NuGetAudit>
+    <NoWarn>$(NoWarn);NU5104;NU5110;NU5111;NU5125</NoWarn>
+  </PropertyGroup>
+</Project>

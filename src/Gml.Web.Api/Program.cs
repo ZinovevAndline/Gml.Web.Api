@@ -1,6 +1,9 @@
 using Gml.Web.Api.Core.Extensions;
+using Microsoft.Extensions.Logging;
 
-WebApplication.CreateBuilder(args)
+var builder = WebApplication.CreateBuilder(args);
+builder.Logging.AddFilter(static (_, level) => level >= LogLevel.Error);
+builder
     .RegisterServices()
     .Build()
     .RegisterServices()
