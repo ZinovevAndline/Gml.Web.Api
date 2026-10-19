@@ -30,7 +30,9 @@ public static class BrowserLauncherAuthHandler
         public SemaphoreSlim Gate { get; } = new(1, 1);
     }
 
-    private sealed record PollBody(string? FlowId, string? DeviceCode);
+    private sealed record PollBody(
+        [property: System.Text.Json.Serialization.JsonPropertyName("flow_id")] string? FlowId,
+        [property: System.Text.Json.Serialization.JsonPropertyName("device_code")] string? DeviceCode);
     private static readonly ConcurrentDictionary<string, Flow> Flows = new();
     private static readonly ConcurrentDictionary<string, (int Count, DateTimeOffset Until)> Limits = new();
 
