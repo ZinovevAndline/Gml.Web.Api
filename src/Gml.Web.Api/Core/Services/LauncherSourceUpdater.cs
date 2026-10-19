@@ -38,7 +38,9 @@ public static class LauncherSourceUpdater
         var normalizedRemote = remote.TrimEnd('/');
         if (normalizedRemote.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
             normalizedRemote = normalizedRemote[..^4];
-        if (!string.Equals(normalizedRemote, RepositoryUrl[..^4], StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(normalizedRemote, RepositoryUrl[..^4], StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(normalizedRemote, "https://github.com/Gml-Launcher/Gml.Launcher",
+                StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Исходники подключены к другому GitHub-репозиторию. Обновление отменено.");
 
         var changes = await GitAsync(cancellationToken, "-C", source, "status", "--porcelain", "--untracked-files=no");
