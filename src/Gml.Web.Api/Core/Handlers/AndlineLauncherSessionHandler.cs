@@ -125,27 +125,44 @@ public static class AndlineLauncherSessionHandler
                 .Where(item => Guid.TryParse(item.Uuid, out var id) && id == playerUuid)
                 .ToArray();
             if (users.Length == 0)
-                return action == "list" ? Results.Ok(new { sessions = Array.Empty<object>() }) : Results.NotFound();
+                return action == "list" ? Results.Ok(new { sessions = Array.Empty<object>(), history = Array.Empty<object>() }) : Results.NotFound();
     
             var now = DateTime.UtcNow;
     
             if (action == "list")
             {
-                var sessions = users.SelectMany(item => item.LauncherAuthSessions ?? [])
-                    .Where(entry => entry.RevokedAtUtc is null && entry.ExpiresAtUtc > now)
+                // Sessions remain individually revocable, while a bounded
+                // 90-day login history supports investigation of unusual IPs.
+                var history = users.SelectMany(item => item.LauncherAuthSessions ?? [])
+                    .Where(entry => entry.CreatedAtUtc >= now.AddDays(-90))
                     .GroupBy(entry => entry.SessionId, StringComparer.OrdinalIgnoreCase)
                     .Select(group => group.OrderByDescending(entry => entry.CreatedAtUtc).First())
                     .OrderByDescending(entry => entry.CreatedAtUtc)
+                    .Take(80)
                     .Select(entry => new
                     {
                         session_id = entry.SessionId,
                         device_name = entry.DeviceName,
+                        os = entry.OperatingSystem,
+                        architecture = entry.Architecture,
+                        cpu = entry.Processor,
+                        gpu = entry.Graphics,
+                        memory_gb = entry.MemoryGb,
+                        logical_processors = entry.ProcessorCores,
+                        launcher_version = entry.LauncherVersion,
                         ip_address = entry.IpAddress,
                         last_seen_at = entry.LastSeenAtUtc ?? entry.CreatedAtUtc,
                         created_at = entry.CreatedAtUtc,
-                        expires_at = entry.ExpiresAtUtc
+                        expires_at = entry.ExpiresAtUtc,
+                        status = entry.RevokedAtUtc is not null ? "revoked"
+                            : entry.ExpiresAtUtc <= now ? "expired" : "active"
                     }).ToArray();
-                return Results.Ok(new { sessions });
+                var sessions = history.Where(entry => entry.status == "active")
+                    .Select(entry => new {
+                        entry.session_id, entry.device_name, entry.ip_address,
+                        entry.last_seen_at, entry.created_at, entry.expires_at
+                    }).ToArray();
+                return Results.Ok(new { sessions, history });
             }
     
             if (action == "revoke"
