@@ -7,7 +7,7 @@ namespace Gml.Web.Api.Core.Handlers;
 
 public interface IGitHubIntegrationHandler
 {
-    static abstract Task<IResult> GetVersions(IGitHubService gitHubService);
+    static abstract Task<IResult> GetVersions(IGitHubService gitHubService, IGmlManager manager);
 
     static abstract Task<IResult> DownloadLauncher(
         IGmlManager manager,
