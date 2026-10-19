@@ -8,10 +8,17 @@ namespace Gml.Web.Api.Core.Hubs;
 
 public class GitHubLauncherHub(IGitHubService gitHubService, IGmlManager gmlManager) : BaseHub
 {
-    private const string _launcherGitHub = "https://github.com/Gml-Launcher/Gml.Launcher";
+    private const string _launcherGitHub = "https://github.com/ZinovevAndline/Gml.Launcher";
+    private static readonly SemaphoreSlim SourceOperation = new(1, 1);
 
     public async Task Download(string branchName, string host, string folderName)
     {
+        if (!await SourceOperation.WaitAsync(0))
+        {
+            await Clients.Caller.SendAsync("Message", "Дождитесь завершения текущей операции с лаунчером.");
+            await Clients.Caller.SendAsync("LauncherDownloadEnded");
+            return;
+        }
         using var cts = new CancellationTokenSource();
         try
         {
@@ -28,7 +35,7 @@ public class GitHubLauncherHub(IGitHubService gitHubService, IGmlManager gmlMana
 
             ChangeProgress(nameof(GitHubLauncherHub), 5);
             var allowedVersions = await gitHubService
-                .GetRepositoryTags("Gml-Launcher", "Gml.Launcher");
+                .GetRepositoryTags("ZinovevAndline", "Gml.Launcher");
 
             if (allowedVersions.All(c => c != branchName))
             {
@@ -64,11 +71,44 @@ public class GitHubLauncherHub(IGitHubService gitHubService, IGmlManager gmlMana
         {
             await Clients.Caller.SendAsync("LauncherDownloadEnded");
             await cts.CancelAsync();
+            SourceOperation.Release();
+        }
+    }
+
+    /// <summary>Refresh an existing version's sources from the trusted master branch.</summary>
+    public async Task<string> RefreshSource(string version)
+    {
+        if (!await SourceOperation.WaitAsync(0))
+            throw new HubException("Дождитесь завершения другой операции с лаунчером.");
+
+        try
+        {
+            var commit = await LauncherSourceUpdater.RefreshAsync(
+                gmlManager.LauncherInfo.InstallationDirectory, version, Context.ConnectionAborted);
+            return commit.Length >= 12 ? commit[..12] : commit;
+        }
+        catch (InvalidOperationException error)
+        {
+            throw new HubException(error.Message);
+        }
+        catch (Exception)
+        {
+            throw new HubException("Не удалось обновить исходники. Рабочая версия сохранена.");
+        }
+        finally
+        {
+            SourceOperation.Release();
         }
     }
 
     public async Task Compile(string version, string[] osTypes)
     {
+        if (!await SourceOperation.WaitAsync(0))
+        {
+            await Clients.Caller.SendAsync("Message", "Дождитесь завершения текущей операции с лаунчером.");
+            await Clients.Caller.SendAsync("LauncherBuildEnded");
+            return;
+        }
         IDisposable? downloadLogsDisposable = null;
         IDisposable? buildLogsDisposable = null;
 
@@ -94,7 +134,6 @@ public class GitHubLauncherHub(IGitHubService gitHubService, IGmlManager gmlMana
                     await gmlManager.Notifications.SendMessage("Сборка лаунчера завершилась ошибкой!",
                         NotificationType.Error);
 
-                await Clients.Caller.SendAsync("LauncherBuildEnded");
             }
         }
         catch (Exception exception)
@@ -106,6 +145,8 @@ public class GitHubLauncherHub(IGitHubService gitHubService, IGmlManager gmlMana
         {
             downloadLogsDisposable?.Dispose();
             buildLogsDisposable?.Dispose();
+            SourceOperation.Release();
+            await Clients.Caller.SendAsync("LauncherBuildEnded");
         }
     }
 }
