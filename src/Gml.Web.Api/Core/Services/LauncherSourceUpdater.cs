@@ -43,9 +43,19 @@ public static class LauncherSourceUpdater
                 StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Исходники подключены к другому GitHub-репозиторию. Обновление отменено.");
 
-        var changes = await GitAsync(cancellationToken, "-C", source, "status", "--porcelain", "--untracked-files=no");
+        // The panel itself changes this tracked file when configuring a
+        // downloaded launcher. Preserve its connection settings during refresh,
+        // but continue to reject every other tracked change (incl. submodules).
+        // Never reset, clean or silently overwrite an actual source-code patch.
+        var changes = await GitAsync(cancellationToken,
+            "-C", source, "status", "--porcelain", "--untracked-files=no",
+            "--", ".", ":(exclude)src/Gml.Launcher/Assets/Resources/ResourceKeysDictionary.cs");
         if (!string.IsNullOrWhiteSpace(changes))
-            throw new InvalidOperationException("В исходниках есть ручные изменения. Сохраните их в GitHub перед обновлением.");
+        {
+            Console.Error.WriteLine("[launcher-refresh] Other tracked edits: " + changes.Trim());
+            throw new InvalidOperationException(
+                "Есть изменения в коде лаунчера. Сохраните их перед обновлением — настройки подключения сохранятся автоматически.");
+        }
 
         var currentSha = (await GitAsync(cancellationToken, "-C", source, "rev-parse", "HEAD")).Trim();
         var stage = Path.Combine(projectRoot, ".launcher-source-staging-" + Guid.NewGuid().ToString("N"));
