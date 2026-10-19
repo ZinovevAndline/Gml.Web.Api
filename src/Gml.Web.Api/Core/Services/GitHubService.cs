@@ -191,7 +191,7 @@ public class GitHubService : IGitHubService
             // Escape user-configured values instead of generating C# code from
             // raw host/folder input.
             var literal = JsonSerializer.Serialize(value);
-            return match.Value.Replace("\\\"" + current + "\\\"", literal, StringComparison.Ordinal);
+            return match.Value.Replace(current, literal[1..^1], StringComparison.Ordinal);
         });
         if (Regex.IsMatch(updated, "\\\"\\{\\{[A-Z0-9_]+\\}\\}\\\""))
             throw new InvalidOperationException(
