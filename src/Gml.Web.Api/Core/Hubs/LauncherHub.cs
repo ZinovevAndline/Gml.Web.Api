@@ -46,7 +46,12 @@ public class LauncherHub : BaseHub
     {
         // JWT signature verification alone is insufficient after revocation.
         // Require the bearer to be present in the active server-side session table.
-        var token = Context.GetHttpContext()?.Request.Query["access_token"].ToString();
+        var request = Context.GetHttpContext()?.Request;
+        var authorization = request?.Headers.Authorization.ToString();
+        var token = authorization is not null
+            && authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? authorization["Bearer ".Length..].Trim()
+            : request?.Query["access_token"].ToString(); // Legacy clients only.
         var expectedUuid = Context.User?.FindFirstValue(ClaimTypes.NameIdentifier);
         if (string.IsNullOrWhiteSpace(token)
             || string.IsNullOrWhiteSpace(expectedUuid)
