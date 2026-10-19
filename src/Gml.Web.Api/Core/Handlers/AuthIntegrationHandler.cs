@@ -496,7 +496,11 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
 
         if (service == null) return Results.NotFound();
 
-        service.Endpoint = updateDto.Endpoint;
+        // Normalize the ANDLINE provider to the origin; never persist a
+        // manually entered authentication path or credentials.
+        service.Endpoint = updateDto.AuthType == AuthType.Andline
+            && AndlineAuthUrl.TryNormalize(updateDto.Endpoint, out var origin)
+            ? origin : updateDto.Endpoint;
 
         await gmlManager.Integrations.SetActiveAuthService(service);
 
