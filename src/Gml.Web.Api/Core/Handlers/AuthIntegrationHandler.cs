@@ -85,15 +85,16 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
 
     private static IResult HandleAuthException(Exception exception, bool isHttpRequestException)
     {
-        Console.WriteLine(exception);
-
-        var errorMessage = string.Join(". ",
-            "Произошла ошибка при обмене данных с сервисом авторизации",
-            exception.Message);
-
-        return Results.BadRequest(ResponseMessage.Create(
-            errorMessage,
-            HttpStatusCode.InternalServerError));
+        // Never send internal endpoint URLs, exception stacks or upstream
+        // implementation details to the player. Distinguish a temporary
+        // upstream outage from malformed player credentials.
+        Console.Error.WriteLine("[GML auth] " + exception.GetType().Name);
+        var message = isHttpRequestException
+            ? "Сервис авторизации временно недоступен. Повторите попытку позже."
+            : "Не удалось завершить вход. Попробуйте ещё раз.";
+        return Results.Json(
+            ResponseMessage.Create(message, HttpStatusCode.ServiceUnavailable),
+            statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
     public static async Task<IResult> Auth(
