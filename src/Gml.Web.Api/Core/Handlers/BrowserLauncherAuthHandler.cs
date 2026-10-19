@@ -23,6 +23,7 @@ public static class BrowserLauncherAuthHandler
         public required string UserCode { get; init; }
         public required string DeviceLabel { get; init; }
         public required string Hwid { get; init; }
+        public string? HardwareSummary { get; init; }
         public required DateTimeOffset ExpiresAt { get; init; }
         public string? Username { get; set; }
         public string? Uuid { get; set; }
@@ -96,6 +97,7 @@ public static class BrowserLauncherAuthHandler
             UserCode = code,
             Hwid = context.Request.Headers["X-HWID"].ToString()[..Math.Min(context.Request.Headers["X-HWID"].ToString().Length, 160)],
             DeviceLabel = agent.Length > 160 ? agent[..160] : agent,
+            HardwareSummary = context.Request.Headers["X-Andline-Device-Info"].ToString(),
             ExpiresAt = now.AddMinutes(5)
         };
         Flows[id] = flow;
@@ -177,7 +179,8 @@ public static class BrowserLauncherAuthHandler
             // channel, not a browser redirect or launcher-supplied username.
             var result = await AuthIntegrationHandler.CompleteBrowserSignInAsync(
                 context, manager, tokens, mapper,
-                flow.Username, flow.Uuid, flow.Hwid, flow.DeviceLabel);
+                flow.Username, flow.Uuid, flow.Hwid, flow.DeviceLabel,
+                flow.HardwareSummary);
             if (result is null) return Results.StatusCode(503);
             flow.Consumed = true;
             Flows.TryRemove(input.FlowId, out _);
