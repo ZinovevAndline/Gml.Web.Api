@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http.Headers;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using GmlCore.Interfaces;
 using Newtonsoft.Json.Linq;
 
@@ -150,26 +152,53 @@ public class GitHubService : IGitHubService
 
     public async Task EditLauncherFiles(string projectPath, string host, string folder)
     {
-        var keys = new Dictionary<string, string>
+        // New versions contain a checked-in file with real defaults plus a
+        // template with many placeholder constants. Do not replace that file
+        // with a template containing unresolved website/API/session settings.
+        var resourceDirectory = Path.Combine(projectPath, "src", "Gml.Launcher", "Assets", "Resources");
+        var settingsTemplateFile = Path.Combine(resourceDirectory, "ResourceKeysDictionary.Template.cs");
+        var settingsFile = Path.Combine(resourceDirectory, "ResourceKeysDictionary.cs");
+        if (!File.Exists(settingsTemplateFile) || !File.Exists(settingsFile))
+            throw new InvalidOperationException("Не удалось найти настройки исходников лаунчера.");
+
+        var constants = new Regex(
+            "public\\s+const\\s+string\\s+(?<name>[A-Za-z][A-Za-z0-9_]*)\\s*=\\s*\\\"(?<value>(?:\\\\.|[^\\\"\\\\])*)\\\"\\s*;",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        var original = await File.ReadAllTextAsync(settingsFile);
+        var defaults = constants.Matches(original)
+            .ToDictionary(m => m.Groups["name"].Value,
+                m => m.Groups["value"].Value, StringComparer.Ordinal);
+        if (!defaults.ContainsKey("Host") || !defaults.ContainsKey("FolderName"))
+            throw new InvalidOperationException("Не удалось прочитать настройки подключения лаунчера.");
+
+        var template = await File.ReadAllTextAsync(settingsTemplateFile);
+        var updated = constants.Replace(template, match =>
         {
-            { "{{HOST}}", host },
-            { "{{FOLDER_NAME}}", folder }
-        };
+            var current = match.Groups["value"].Value;
+            if (!current.StartsWith("{{", StringComparison.Ordinal)
+                || !current.EndsWith("}}", StringComparison.Ordinal))
+                return match.Value;
 
-        var settingsTemplateFile =
-            Path.Combine(projectPath, "src", "Gml.Launcher", "Assets", "Resources",
-                "ResourceKeysDictionary.Template.cs");
+            var name = match.Groups["name"].Value;
+            var value = name switch
+            {
+                "Host" => host,
+                "FolderName" => folder,
+                _ => defaults.GetValueOrDefault(name)
+            };
+            if (value is null) return match.Value;
+            // JSON escaped strings are also valid quoted C# string contents.
+            // Escape user-configured values instead of generating C# code from
+            // raw host/folder input.
+            var literal = JsonSerializer.Serialize(value);
+            return match.Value.Replace("\\\"" + current + "\\\"", literal, StringComparison.Ordinal);
+        });
+        if (Regex.IsMatch(updated, "\\\"\\{\\{[A-Z0-9_]+\\}\\}\\\""))
+            throw new InvalidOperationException(
+                "Не удалось заполнить настройки лаунчера. Исходники не изменены.");
 
-        var settingsFile =
-            Path.Combine(projectPath, "src", "Gml.Launcher", "Assets", "Resources", "ResourceKeysDictionary.cs");
-
-        if (File.Exists(settingsFile))
-            File.Delete(settingsFile);
-
-        var content = await File.ReadAllTextAsync(settingsTemplateFile);
-
-        foreach (var key in keys) content = content.Replace(key.Key, key.Value);
-
-        await File.WriteAllTextAsync(settingsFile, content);
+        // Write only a complete validated replacement. No deletion before
+        // template and defaults have been checked.
+        await File.WriteAllTextAsync(settingsFile, updated);
     }
 }
