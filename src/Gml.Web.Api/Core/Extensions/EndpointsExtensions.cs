@@ -558,6 +558,12 @@ public static class EndpointsExtensions
             .Produces<ResponseMessage<PlayerReadDto>>()
             .Produces<ResponseMessage>((int)HttpStatusCode.BadRequest);
 
+        // Browser never sees the device's secret; launcher polls with it over TLS.
+        app.MapPost("/api/v1/integrations/auth/browser/start", BrowserLauncherAuthHandler.Start)
+            .WithTags("Integration/Auth/Browser");
+        app.MapPost("/api/v1/integrations/auth/browser/poll", BrowserLauncherAuthHandler.Poll)
+            .WithTags("Integration/Auth/Browser");
+
         app.MapPost("/api/v1/integrations/auth/checkToken", AuthIntegrationHandler.AuthWithToken)
             .WithOpenApi(generatedOperation =>
             {
