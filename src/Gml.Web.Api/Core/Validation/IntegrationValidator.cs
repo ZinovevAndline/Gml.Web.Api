@@ -1,5 +1,7 @@
 using FluentValidation;
 using Gml.Dto.Integration;
+using Gml.Web.Api.Core.Integrations.Auth;
+using GmlCore.Interfaces.Enums;
 
 namespace Gml.Web.Api.Core.Validation;
 
@@ -9,7 +11,10 @@ public class IntegrationValidator : AbstractValidator<IntegrationUpdateDto>
     {
         RuleFor(x => x.Endpoint)
             .NotEmpty().WithMessage("Endpoint обязателен.")
-            .Must(IsValidUrl).WithMessage("Endpoint должен быть валидным URL.");
+            .Must((dto, url) => dto.AuthType == AuthType.Andline
+                ? AndlineAuthUrl.TryNormalize(url, out _)
+                : IsValidUrl(url))
+            .WithMessage("Для ANDLINE укажите только адрес сайта (например, https://andline.pro), без /api, пути, параметров или логина.");
     }
 
     private bool IsValidUrl(string url)
