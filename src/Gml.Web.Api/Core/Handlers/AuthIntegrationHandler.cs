@@ -163,7 +163,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
                     authDto.Password,
                     userAgent,
                     context.Request.Protocol,
-                    context.ParseRemoteAddress(),
+                    context.Connection.RemoteIpAddress,
                     authResult.Uuid,
                     hwid,
                     authResult.IsSlim);
@@ -174,7 +174,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
                 return Results.Unauthorized();
 
             IssueLauncherJwt(accessTokenService, launcherUser, hwid,
-                userAgent, context.ParseRemoteAddress()?.ToString(),
+                userAgent, context.Connection.RemoteIpAddress?.ToString(),
                 context.Request.Headers["X-Andline-Device-Info"].ToString());
 
             // Persist the authorization decision before fetching optional skins;
@@ -341,11 +341,11 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
             // GetAuthData creates or reconciles the canonical GML player record.
             var player = await manager.Users.GetAuthData(
                 username, string.Empty, device, context.Request.Protocol,
-                context.ParseRemoteAddress(), uuid, hwid, false);
+                context.Connection.RemoteIpAddress, uuid, hwid, false);
             if (player is not AuthUser authUser || authUser.IsBanned
                 || !Guid.TryParse(authUser.Uuid, out var actual) || actual != identity)
                 return null;
-            IssueLauncherJwt(tokens, authUser, hwid, device, context.ParseRemoteAddress()?.ToString(),
+            IssueLauncherJwt(tokens, authUser, hwid, device, context.Connection.RemoteIpAddress?.ToString(),
                 hardwareSummary);
             await manager.Users.UpdateUser(authUser);
             return await HandleAuthenticatedUser(context, manager, mapper, authUser, device);
@@ -492,17 +492,56 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
     /// token under the same per-player lock as sign-in to prevent a stale
     /// session snapshot from replacing a concurrent newly issued token.
     /// </summary>
+    // The browser/session history should never attribute a real launcher
+    // login to the local Pangolin/Newt or YARP socket. Only already-resolved
+    // HttpContext.Connection addresses are permitted here; XFF is processed
+    // earlier by the strictly trusted ForwardedHeaders middleware.
+    internal static string? PublicLauncherIp(IPAddress? address)
+    {
+        if (address is null) return null;
+        if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+        if (IPAddress.IsLoopback(address)) return null;
+        if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+        {
+            var b = address.GetAddressBytes();
+            if (b[0] == 0 || b[0] == 10 || b[0] == 127 || b[0] >= 224
+                || b[0] == 169 && b[1] == 254
+                || b[0] == 172 && b[1] >= 16 && b[1] <= 31
+                || b[0] == 192 && b[1] == 168
+                || b[0] == 100 && b[1] >= 64 && b[1] <= 127)
+                return null;
+            return address.ToString();
+        }
+        if (address.IsIPv6LinkLocal || address.IsIPv6Multicast
+            || address.IsIPv6SiteLocal || address.Equals(IPAddress.IPv6Any))
+            return null;
+        var bytes = address.GetAddressBytes();
+        if (bytes.Length == 16 && (bytes[0] & 0xfe) == 0xfc) return null;
+        return address.ToString();
+    }
+
+    private static bool MissingPublicIp(string? address) =>
+        !IPAddress.TryParse(address, out var parsed) || PublicLauncherIp(parsed) is null;
+
+    /// <summary>
+    /// A valid launcher JWT may safely repair an older session written while
+    /// Pangolin's real address was ignored. It never trusts new client headers,
+    /// overwrites an existing public login IP, or resurrects revoked tokens.
+    /// </summary>
     public static async Task TouchLauncherSessionAsync(
-        IGmlManager manager, AuthUser validatedUser, string token)
+        IGmlManager manager, AuthUser validatedUser, string token, IPAddress? remoteIp = null)
     {
         if (!Guid.TryParse(validatedUser.Uuid, out var uuid)) return;
         var hash = HashToken(token);
         var now = DateTime.UtcNow;
+        var trustedPublicIp = PublicLauncherIp(remoteIp);
         var entry = validatedUser.LauncherAuthSessions?.FirstOrDefault(item =>
             item.RevokedAtUtc is null && item.ExpiresAtUtc > now
             && string.Equals(item.TokenHash, hash, StringComparison.OrdinalIgnoreCase));
-        if (entry is null || entry.LastSeenAtUtc is { } last && now - last < TimeSpan.FromMinutes(1))
-            return;
+        if (entry is null) return;
+        var repairIp = trustedPublicIp is not null && MissingPublicIp(entry.IpAddress);
+        if (!repairIp && entry.LastSeenAtUtc is { } last
+            && now - last < TimeSpan.FromMinutes(1)) return;
 
         var stripe = SessionLockForUuid(uuid);
         await stripe.WaitAsync();
@@ -512,9 +551,11 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
             var active = current?.LauncherAuthSessions?.FirstOrDefault(item =>
                 item.RevokedAtUtc is null && item.ExpiresAtUtc > DateTime.UtcNow
                 && string.Equals(item.TokenHash, hash, StringComparison.OrdinalIgnoreCase));
-            if (active is null || active.LastSeenAtUtc is { } seen
-                && DateTime.UtcNow - seen < TimeSpan.FromMinutes(1))
-                return;
+            if (active is null) return;
+            var shouldRepair = trustedPublicIp is not null && MissingPublicIp(active.IpAddress);
+            if (!shouldRepair && active.LastSeenAtUtc is { } seen
+                && DateTime.UtcNow - seen < TimeSpan.FromMinutes(1)) return;
+            if (shouldRepair) active.IpAddress = trustedPublicIp;
             active.LastSeenAtUtc = DateTime.UtcNow;
             await manager.Users.UpdateUser(current!);
         }
