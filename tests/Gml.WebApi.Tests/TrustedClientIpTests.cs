@@ -1,5 +1,7 @@
 using System.Net;
 using Gml.Web.Api.Core.Extensions;
+using Gml.Web.Api.Core.Handlers;
+using System.Reflection;
 using Microsoft.AspNetCore.Http;
 using NUnit.Framework;
 
@@ -17,6 +19,29 @@ public class TrustedClientIpTests
         request.Request.Headers["X-Real-IP"] = "192.0.2.2";
         request.Request.Headers["X-Forwarded-For"] = "192.0.2.3";
         Assert.That(request.ParseRemoteAddress(), Is.EqualTo(IPAddress.Parse("203.0.113.60")));
+    }
+
+    [Test]
+    public void LauncherSessionIpCannotRecordLoopbackOrPrivatePangolinPeer()
+    {
+        var publicIp = typeof(AuthIntegrationHandler).GetMethod(
+            "PublicLauncherIp", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.That(publicIp, Is.Not.Null);
+
+        string? Resolve(string input) => (string?)publicIp!.Invoke(
+            null, new object?[] { IPAddress.Parse(input) });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Resolve("127.0.0.1"), Is.Null);
+            Assert.That(Resolve("::1"), Is.Null);
+            Assert.That(Resolve("10.42.0.4"), Is.Null);
+            Assert.That(Resolve("172.20.0.6"), Is.Null);
+            Assert.That(Resolve("192.168.1.5"), Is.Null);
+            Assert.That(Resolve("::ffff:127.0.0.1"), Is.Null);
+            Assert.That(Resolve("198.51.100.45"), Is.EqualTo("198.51.100.45"));
+            Assert.That(Resolve("::ffff:198.51.100.45"), Is.EqualTo("198.51.100.45"));
+        });
     }
 
     [Test]
