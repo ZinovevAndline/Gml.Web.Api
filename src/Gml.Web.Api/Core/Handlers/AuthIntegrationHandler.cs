@@ -233,6 +233,18 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
 
             if (user is not null && !user.IsBanned && accessTokenService.ValidateToken(authDto.AccessToken))
             {
+                // Saved launcher accounts restore via AuthWithToken: their JWT
+                // lives in the request BODY, so JwtBearer.OnTokenValidated never
+                // runs. Repair the old loopback IP on this authenticated path
+                // as well. TouchLauncherSessionAsync checks the live, non-revoked
+                // session and compares the token hash under its account lock.
+                if (authType == AuthType.Andline && user is AuthUser launcherAccount)
+                {
+                    await TouchLauncherSessionAsync(
+                        gmlManager, launcherAccount, authDto.AccessToken,
+                        context.Connection.RemoteIpAddress);
+                }
+
                 return await HandleAuthenticatedUser(context, gmlManager, mapper, user, userAgent);
             }
 
