@@ -174,7 +174,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
                 return Results.Unauthorized();
 
             IssueLauncherJwt(accessTokenService, launcherUser, hwid,
-                userAgent, context.Connection.RemoteIpAddress?.ToString(),
+                userAgent, PublicLauncherIp(context.Connection.RemoteIpAddress),
                 context.Request.Headers["X-Andline-Device-Info"].ToString());
 
             // Persist the authorization decision before fetching optional skins;
@@ -345,7 +345,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
             if (player is not AuthUser authUser || authUser.IsBanned
                 || !Guid.TryParse(authUser.Uuid, out var actual) || actual != identity)
                 return null;
-            IssueLauncherJwt(tokens, authUser, hwid, device, context.Connection.RemoteIpAddress?.ToString(),
+            IssueLauncherJwt(tokens, authUser, hwid, device, PublicLauncherIp(context.Connection.RemoteIpAddress),
                 hardwareSummary);
             await manager.Users.UpdateUser(authUser);
             return await HandleAuthenticatedUser(context, manager, mapper, authUser, device);
