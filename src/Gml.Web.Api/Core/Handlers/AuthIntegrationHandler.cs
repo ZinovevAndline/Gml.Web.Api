@@ -238,6 +238,10 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
                 // runs. Repair the old loopback IP on this authenticated path
                 // as well. TouchLauncherSessionAsync checks the live, non-revoked
                 // session and compares the token hash under its account lock.
+                // Profile session initialization may also persist this user
+                // snapshot. Perform IP repair LAST so a stale pre-repair user
+                // object cannot overwrite the just-corrected device history.
+                var result = await HandleAuthenticatedUser(context, gmlManager, mapper, user, userAgent);
                 if (authType == AuthType.Andline && user is AuthUser launcherAccount)
                 {
                     await TouchLauncherSessionAsync(
@@ -245,7 +249,7 @@ public class AuthIntegrationHandler : IAuthIntegrationHandler
                         context.Connection.RemoteIpAddress);
                 }
 
-                return await HandleAuthenticatedUser(context, gmlManager, mapper, user, userAgent);
+                return result;
             }
 
             return Results.BadRequest(ResponseMessage.Create(
