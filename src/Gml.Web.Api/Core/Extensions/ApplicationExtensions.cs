@@ -310,7 +310,8 @@ public static class ApplicationExtensions
                         }
 
                         await Gml.Web.Api.Core.Handlers.AuthIntegrationHandler
-                            .TouchLauncherSessionAsync(manager, account, token);
+                            .TouchLauncherSessionAsync(manager, account, token,
+                                context.HttpContext.Connection.RemoteIpAddress);
                     }
                 };
             })
