@@ -43,9 +43,15 @@ public class FileHandler : IFileHandler
                 ? new DateTimeOffset(File.GetLastWriteTimeUtc(local.Name))
                 : null;
 
+            // Keep human-readable download names despite immutable IDs.
+            var publicName = immutable
+                ? fileHash.Replace("-" + digest.Groups[1].Value + "-", "-",
+                    StringComparison.OrdinalIgnoreCase)
+                : result.fileName;
+
             // Results.File uses the seekable stream's Length/Position to emit
             // 206/416 and conditional HTTP responses without buffering the bytes.
-            return Results.File(file, "application/octet-stream", result.fileName,
+            return Results.File(file, "application/octet-stream", publicName,
                 lastModified: lastModified, entityTag: etag, enableRangeProcessing: true);
         }
         catch (FileNotFoundException)
