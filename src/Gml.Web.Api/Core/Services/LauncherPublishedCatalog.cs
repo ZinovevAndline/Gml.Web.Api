@@ -19,7 +19,7 @@ public static class LauncherPublishedCatalog
             if (metadata is not null && metadata.TryGetValue(rid, out var item)
                 && item is not null && item.FileId == version.Guid
                 && item.Version == version.Version && item.SizeBytes > 0
-                && item.Sha256.Length == 64 && item.Sha256.All(Uri.IsHexDigit))
+                && item.Sha256 is { Length: 64 } && item.Sha256.All(Uri.IsHexDigit))
                 matched = item;
 
             result[rid] = new LauncherPublishedVersionDto
