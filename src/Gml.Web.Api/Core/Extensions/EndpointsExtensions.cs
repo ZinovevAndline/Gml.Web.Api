@@ -18,6 +18,7 @@ using GmlCore.Interfaces.Notifications;
 using GmlCore.Interfaces.User;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Cors;
+using Microsoft.AspNetCore.Routing;
 
 namespace Gml.Web.Api.Core.Extensions;
 
@@ -1040,16 +1041,7 @@ public static class EndpointsExtensions
 
         #region Files
 
-        app.MapMethods("/api/v1/file/{fileHash}", new[] { "GET", "HEAD" }, FileHandler.GetFile)
-            .WithOpenApi(generatedOperation =>
-            {
-                generatedOperation.Summary = "Получение файла на загрузку";
-                return generatedOperation;
-            })
-            .WithDescription("Получение файла на загрузку")
-            .WithName("Download file")
-            .WithTags("Files")
-            .Produces<ResponseMessage>((int)HttpStatusCode.NotFound);
+        RegisterFileDownloadEndpoints(app);
 
         app.MapPost("/api/v1/file/whiteList", FileHandler.AddFileWhiteList)
             .WithOpenApi(generatedOperation =>
@@ -1547,5 +1539,32 @@ public static class EndpointsExtensions
         #endregion
 
         return app;
+    }
+
+    /// <summary>
+    /// GET and HEAD must have separate route metadata. WithOpenApi expects a
+    /// single HTTP method and throws during routing initialization otherwise.
+    /// Both verbs still use the same streaming file handler, preserving ETag,
+    /// conditional responses and byte-range support.
+    /// </summary>
+    internal static void RegisterFileDownloadEndpoints(IEndpointRouteBuilder app)
+    {
+        const string route = "/api/v1/file/{fileHash}";
+
+        app.MapGet(route, FileHandler.GetFile)
+            .WithOpenApi(generatedOperation =>
+            {
+                generatedOperation.Summary = "Получение файла на загрузку";
+                return generatedOperation;
+            })
+            .WithDescription("Получение файла на загрузку")
+            .WithName("Download file")
+            .WithTags("Files")
+            .Produces<ResponseMessage>((int)HttpStatusCode.NotFound);
+
+        // HEAD is a real supported route, but does not need a second OpenAPI
+        // operation. ASP.NET Core's Results.File suppresses its payload.
+        app.MapMethods(route, new[] { "HEAD" }, FileHandler.GetFile)
+            .ExcludeFromDescription();
     }
 }

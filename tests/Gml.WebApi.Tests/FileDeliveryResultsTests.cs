@@ -1,3 +1,7 @@
+using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.Builder;
+using GmlCore.Interfaces;
+using Gml.Web.Api.Core.Extensions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Net.Http.Headers;
@@ -65,5 +69,30 @@ public class FileDeliveryResultsTests
         await FileResult().ExecuteAsync(context);
         Assert.That(context.Response.StatusCode, Is.EqualTo(304));
         Assert.That(((MemoryStream)context.Response.Body).Length, Is.Zero);
+    }
+
+    [Test]
+    public void FileRoutes_InitializeWithSeparateGetAndHeadMethods()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddSingleton<IGmlManager>(_ =>
+            throw new InvalidOperationException("Route registration must not open files."));
+
+        using var app = builder.Build();
+        EndpointsExtensions.RegisterFileDownloadEndpoints(app);
+
+        // Materializing EndpointDataSource triggers WithOpenApi. Previously this
+        // threw on GET+HEAD in one MapMethods registration and broke every URL.
+        var routes = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(dataSource => dataSource.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Where(endpoint => endpoint.RoutePattern.RawText == "/api/v1/file/{fileHash}")
+            .ToArray();
+
+        Assert.That(routes, Has.Length.EqualTo(2));
+        var verbs = routes.Select(endpoint =>
+            endpoint.Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods.ToArray()).ToArray();
+        Assert.That(verbs.All(methods => methods.Length == 1), Is.True);
+        Assert.That(verbs.SelectMany(methods => methods), Is.EquivalentTo(new[] { "GET", "HEAD" }));
     }
 }
