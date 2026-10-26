@@ -3,15 +3,30 @@ using MapsterMapper;
 using Gml.Domains.Launcher;
 using Gml.Dto.Launcher;
 using Gml.Dto.Messages;
+using Gml.Models.Launcher;
+using Gml.Web.Api.Core.Services;
 using GmlCore.Interfaces;
 
 namespace Gml.Web.Api.Core.Handlers;
 
 public class LauncherUpdateHandler : ILauncherUpdateHandler
 {
-    public static IResult GetActualVersion(IGmlManager gmlManager)
+    public static async Task<IResult> GetActualVersion(IGmlManager gmlManager)
     {
-        return Results.Ok(ResponseMessage.Create(gmlManager.LauncherInfo.ActualLauncherVersion, string.Empty, HttpStatusCode.OK));
+        Dictionary<string, LauncherPublishedFileMetadata>? metadata = null;
+        try
+        {
+            metadata = await gmlManager.Storage.GetAsync<Dictionary<string, LauncherPublishedFileMetadata>>(
+                Gml.Core.Constants.StorageConstants.PublishedLauncherFiles);
+        }
+        catch (Exception)
+        {
+            // Keep legacy launcher update checks working when metadata is absent.
+        }
+
+        var versions = LauncherPublishedCatalog.Map(
+            gmlManager.LauncherInfo.ActualLauncherVersion, metadata);
+        return Results.Ok(ResponseMessage.Create(versions, string.Empty, HttpStatusCode.OK));
     }
 
     public static async Task<IResult> GetBuilds(IGmlManager gmlManager, IMapper mapper)
