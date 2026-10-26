@@ -3,7 +3,6 @@ using MapsterMapper;
 using Gml.Domains.Launcher;
 using Gml.Dto.Launcher;
 using Gml.Dto.Messages;
-using Gml.Models.Launcher;
 using Gml.Web.Api.Core.Services;
 using GmlCore.Interfaces;
 
@@ -13,11 +12,11 @@ public class LauncherUpdateHandler : ILauncherUpdateHandler
 {
     public static async Task<IResult> GetActualVersion(IGmlManager gmlManager)
     {
-        Dictionary<string, LauncherPublishedFileMetadata>? metadata = null;
+        Dictionary<string, LauncherBinaryReleaseMetadata>? metadata = null;
         try
         {
-            metadata = await gmlManager.Storage.GetAsync<Dictionary<string, LauncherPublishedFileMetadata>>(
-                Gml.Core.Constants.StorageConstants.PublishedLauncherFiles);
+            metadata = await gmlManager.Storage.GetAsync<Dictionary<string, LauncherBinaryReleaseMetadata>>(
+                "PublishedLauncherFiles");
         }
         catch (Exception)
         {
