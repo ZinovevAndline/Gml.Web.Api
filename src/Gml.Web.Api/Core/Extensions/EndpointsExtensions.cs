@@ -1040,7 +1040,7 @@ public static class EndpointsExtensions
 
         #region Files
 
-        app.MapGet("/api/v1/file/{fileHash}", FileHandler.GetFile)
+        app.MapMethods("/api/v1/file/{fileHash}", new[] { "GET", "HEAD" }, FileHandler.GetFile)
             .WithOpenApi(generatedOperation =>
             {
                 generatedOperation.Summary = "Получение файла на загрузку";
