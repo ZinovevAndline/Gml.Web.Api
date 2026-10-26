@@ -1,4 +1,7 @@
 using System.Net;
+using System.IO;
+using System.Text.RegularExpressions;
+using Microsoft.Net.Http.Headers;
 using MapsterMapper;
 using FluentValidation;
 using Gml.Dto.Files;
@@ -14,22 +17,59 @@ public class FileHandler : IFileHandler
 {
     public static async Task<IResult> GetFile(HttpContext context, IGmlManager gmlManager, string fileHash)
     {
-        // var response = context.Response;
-
-        var (file, fileName, length) = await gmlManager.Files.GetFileStream(fileHash);
-
+        Stream? file = null;
         try
         {
-            return Results.File(file, "application/octet-stream", fileName);
+            var result = await gmlManager.Files.GetFileStream(fileHash);
+            file = result.File;
+            if (string.IsNullOrEmpty(result.fileName))
+            {
+                await file.DisposeAsync();
+                return Results.NotFound();
+            }
+
+            // Files with a content SHA-256 embedded in the ID are immutable.
+            // Legacy mutable IDs must never receive long-lived immutable caching.
+            var digest = Regex.Match(fileHash, @"(?:^|-)([0-9a-fA-F]{64})(?:-|$)");
+            var immutable = digest.Success;
+            context.Response.Headers.CacheControl = immutable
+                ? "public, max-age=31536000, immutable"
+                : "no-store";
+
+            EntityTagHeaderValue? etag = immutable
+                ? new EntityTagHeaderValue($"\"{digest.Groups[1].Value.ToLowerInvariant()}\"")
+                : null;
+            DateTimeOffset? lastModified = file is FileStream local
+                ? new DateTimeOffset(File.GetLastWriteTimeUtc(local.Name))
+                : null;
+
+            // Keep human-readable download names despite immutable IDs.
+            var publicName = immutable
+                ? fileHash.Replace("-" + digest.Groups[1].Value + "-", "-",
+                    StringComparison.OrdinalIgnoreCase)
+                : result.fileName;
+
+            // Results.File uses the seekable stream's Length/Position to emit
+            // 206/416 and conditional HTTP responses without buffering the bytes.
+            return Results.File(file, "application/octet-stream", publicName,
+                lastModified: lastModified, entityTag: etag, enableRangeProcessing: true);
+        }
+        catch (FileNotFoundException)
+        {
+            if (file is not null) await file.DisposeAsync();
+            return Results.NotFound();
+        }
+        catch (DirectoryNotFoundException)
+        {
+            if (file is not null) await file.DisposeAsync();
+            return Results.NotFound();
         }
         catch (Exception exception)
         {
-            await file.DisposeAsync();
-            Console.WriteLine(fileName + exception);
+            if (file is not null) await file.DisposeAsync();
             gmlManager.BugTracker.CaptureException(exception);
+            return Results.StatusCode(StatusCodes.Status500InternalServerError);
         }
-
-        return Results.NotFound();
     }
 
     [Authorize]
