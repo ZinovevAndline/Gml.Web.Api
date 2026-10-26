@@ -1,5 +1,4 @@
 using Gml.Domains.Launcher;
-using Gml.Models.Launcher;
 using Gml.Web.Api.Core.Services;
 using GmlCore.Interfaces.Storage;
 
@@ -16,7 +15,7 @@ public class LauncherPublishedCatalogTests
         };
         var versions = new Dictionary<string, IVersionFile?> { ["win-x64"] = version };
         var publishedAt = new DateTimeOffset(2026, 10, 26, 10, 0, 0, TimeSpan.Zero);
-        var metadata = new Dictionary<string, LauncherPublishedFileMetadata>
+        var metadata = new Dictionary<string, LauncherBinaryReleaseMetadata>
         {
             ["win-x64"] = new()
             {
@@ -45,7 +44,7 @@ public class LauncherPublishedCatalogTests
         {
             ["win-x64"] = new LauncherVersion { Version = "5.1", Guid = "new-file" }
         };
-        var old = new Dictionary<string, LauncherPublishedFileMetadata>
+        var old = new Dictionary<string, LauncherBinaryReleaseMetadata>
         {
             ["win-x64"] = new()
             {
