@@ -1,0 +1,24 @@
+name: File delivery API PR validation
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - 'src/Gml.Web.Api/Core/Handlers/FileHandler.cs'
+      - 'src/Gml.Web.Api/Core/Extensions/EndpointsExtensions.cs'
+      - 'tests/Gml.WebApi.Tests/FileDeliveryResultsTests.cs'
+      - '.github/workflows/file-delivery-pr.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  file-api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Test HEAD, Range, 416 and ETag semantics
+        run: dotnet test tests/Gml.WebApi.Tests/Gml.WebApi.Tests.csproj -c Release --filter 'FullyQualifiedName~FileDeliveryResultsTests' --verbosity minimal
