@@ -1,5 +1,5 @@
 using System;
-using Gml.Models.User;
+using Gml.Models.Sessions;
 using Gml.Web.Api.Core.Handlers;
 using NUnit.Framework;
 
