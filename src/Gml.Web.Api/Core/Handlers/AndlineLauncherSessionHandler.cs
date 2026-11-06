@@ -26,6 +26,7 @@ public static class AndlineLauncherSessionHandler
         public string? FlowId { get; set; }
         public string? Code { get; set; }
         public string? Username { get; set; }
+        public string? TokenHash { get; set; }
     }
 
     public static async Task<IResult> Execute(
@@ -35,7 +36,7 @@ public static class AndlineLauncherSessionHandler
         IHubContext<LauncherHub> hub,
         string action)
     {
-        if (action is not ("list" or "revoke" or "revoke-all" or "browser-inspect" or "browser-approve"))
+        if (action is not ("list" or "revoke" or "revoke-all" or "browser-inspect" or "browser-approve" or "menu-validate"))
             return Results.NotFound();
 
         var secret = Environment.GetEnvironmentVariable("ANDLINE_GML_SESSION_SECRET");
@@ -132,7 +133,17 @@ public static class AndlineLauncherSessionHandler
                 return action == "list" ? Results.Ok(new { sessions = Array.Empty<object>(), history = Array.Empty<object>() }) : Results.NotFound();
     
             var now = DateTime.UtcNow;
-    
+            if (action == "menu-validate")
+            {
+                // Only a signed control-plane request can check an individual
+                // device token hash, never an account-wide login grant.
+                var sessions = users.SelectMany(item => item.LauncherAuthSessions ?? []);
+                var active = FindActiveMenuSession(sessions, input.TokenHash, now);
+                return active is null
+                    ? Results.Unauthorized()
+                    : Results.Ok(new { ok = true, session_id = active.SessionId });
+            }
+
             if (action == "list")
             {
                 // Sessions remain individually revocable, while a bounded
@@ -227,4 +238,24 @@ public static class AndlineLauncherSessionHandler
             stripe?.Release();
         }
     }
+    /// <summary>Never accepts a username, old account grant, or expired/revoked token as proof.</summary>
+    public static LauncherAuthSession? FindActiveMenuSession(
+        IEnumerable<LauncherAuthSession> sessions, string? tokenHash, DateTime now)
+    {
+        if (tokenHash is not { Length: 64 } || !tokenHash.All(Uri.IsHexDigit))
+            return null;
+
+        var expected = Convert.FromHexString(tokenHash);
+        foreach (var entry in sessions)
+        {
+            if (entry.RevokedAtUtc is not null || entry.ExpiresAtUtc <= now
+                || entry.TokenHash is not { Length: 64 } || !entry.TokenHash.All(Uri.IsHexDigit))
+                continue;
+            var actual = Convert.FromHexString(entry.TokenHash);
+            if (CryptographicOperations.FixedTimeEquals(expected, actual))
+                return entry;
+        }
+        return null;
+    }
+
 }
